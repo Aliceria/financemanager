@@ -153,7 +153,32 @@ function escapeHtml(value: string): string {
 }
 
 function toInputDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function parseInputDate(value: unknown): Date | null {
+  const match = String(value ?? "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const [, year, month, day] = match;
+  const date = new Date(Number(year), Number(month) - 1, Number(day));
+
+  if (
+    date.getFullYear() !== Number(year) ||
+    date.getMonth() !== Number(month) - 1 ||
+    date.getDate() !== Number(day)
+  ) {
+    return null;
+  }
+
+  return date;
 }
 
 function addYears(date: Date, years: number): Date {
@@ -170,9 +195,9 @@ function addMonths(date: Date, months: number): Date {
 
 function clampDate(dateValue: unknown): Date {
   const today = new Date();
-  const minDate = new Date(toInputDate(today));
+  const minDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const maxDate = addYears(minDate, 1);
-  const requestedDate = new Date(String(dateValue ?? toInputDate(minDate)));
+  const requestedDate = parseInputDate(dateValue) ?? minDate;
 
   if (Number.isNaN(requestedDate.getTime()) || requestedDate < minDate) {
     return minDate;
@@ -230,7 +255,7 @@ function parsePercentageToBasisPoints(value: unknown): number {
     return 0;
   }
 
-  return Math.round(percentage * 100);
+  return Math.min(Math.round(percentage * 100), 10000);
 }
 
 function money(cents: number): string {
@@ -306,7 +331,7 @@ async function buildDashboardSummary(
   dateValue: unknown,
 ): Promise<DashboardSummary> {
   const today = new Date();
-  const minDate = new Date(toInputDate(today));
+  const minDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const maxDate = addYears(minDate, 1);
   const selectedDate = clampDate(dateValue);
   const incomeCents = await getMonthlyIncomeCents(userId);
@@ -1083,8 +1108,25 @@ app.post("/logout", requireLogin, (request, response, next) => {
   });
 });
 
-setupDatabase().then(() => {
-  app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+app.use(
+  (
+    error: Error,
+    _request: Request,
+    response: Response,
+    _next: NextFunction,
+  ) => {
+    console.error(error);
+    response.status(500).send("Erro interno do servidor.");
+  },
+);
+
+setupDatabase()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  })
+  .catch((error) => {
+    console.error("Falha ao iniciar o servidor:", error);
+    process.exit(1);
   });
-});
