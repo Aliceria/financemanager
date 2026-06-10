@@ -559,9 +559,14 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
     .variable-card { grid-column: span 3; }
     .balance-card { grid-column: span 4; }
     .forecast-card { grid-column: span 8; }
-    .item-list { display: grid; gap: 8px; max-height: 210px; overflow: auto; padding-right: 4px; }
-    .item-row { display: grid; grid-template-columns: minmax(120px, 1fr) 110px auto auto; gap: 8px; align-items: center; padding: 8px; background: #111214; border: 1px solid #292b2f; border-radius: 7px; }
-    .percentage-row { grid-template-columns: minmax(110px, 1fr) 82px minmax(115px, auto) auto auto; }
+    .item-list { display: grid; gap: 8px; max-height: 210px; overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
+    .item-row { display: grid; grid-template-columns: minmax(0, 1fr) 96px; gap: 8px; align-items: center; padding: 8px; background: #111214; border: 1px solid #292b2f; border-radius: 7px; }
+    .item-row input { width: 100%; }
+    .item-row button { width: 100%; padding: 7px 8px; font-size: 0.84rem; }
+    .item-row button:first-of-type { grid-column: 1; }
+    .item-row button:last-of-type { grid-column: 2; }
+    .percentage-row { grid-template-columns: minmax(0, 1fr) 84px; }
+    .percentage-row span { grid-column: 1 / -1; color: #cfcfcf; font-size: 0.86rem; }
     .money-input, .percent-input { width: 100%; }
     .empty { margin: 8px 0 0; color: #aaa; }
     details { margin-top: 10px; }
@@ -589,6 +594,7 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
       .dashboard-grid { grid-template-columns: 1fr; }
       .income-card, .fixed-card, .percentage-card, .variable-card, .balance-card, .forecast-card { grid-column: span 1; }
       .compact-form, .income-form, .date-form, .item-row, .percentage-row { grid-template-columns: 1fr; }
+      .item-row button:first-of-type, .item-row button:last-of-type, .percentage-row span { grid-column: auto; }
       .balance-grid { grid-template-columns: 1fr; }
     }
   </style>
