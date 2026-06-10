@@ -25,6 +25,12 @@ interface FinanceSettings {
   monthly_income_cents: number;
 }
 
+interface Expense {
+  id: number;
+  name: string;
+  amount_cents: number;
+}
+
 interface DashboardSummary {
   selectedDate: Date;
   minDate: string;
@@ -36,6 +42,7 @@ interface DashboardSummary {
   percentageTotalCents: number;
   variableTotalCents: number;
   predictedBalanceCents: number;
+  fixedExpenses: Expense[];
 }
 
 const app = express();
@@ -61,6 +68,14 @@ function get<T>(sql: string, params: unknown[] = []): Promise<T | undefined> {
   return new Promise((resolve, reject) => {
     db.get(sql, params, (error, row) =>
       error ? reject(error) : resolve(row as T | undefined),
+    );
+  });
+}
+
+function all<T>(sql: string, params: unknown[] = []): Promise<T[]> {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (error, rows) =>
+      error ? reject(error) : resolve(rows as T[]),
     );
   });
 }
@@ -151,6 +166,18 @@ async function getMonthlyIncomeCents(userId: number): Promise<number> {
   return settings?.monthly_income_cents ?? 0;
 }
 
+async function getFixedExpenses(userId: number): Promise<Expense[]> {
+  return all<Expense>(
+    `
+      SELECT id, name, amount_cents
+      FROM expenses
+      WHERE user_id = ? AND type = 'fixed'
+      ORDER BY name
+    `,
+    [userId],
+  );
+}
+
 async function buildDashboardSummary(
   userId: number,
   dateValue: unknown,
@@ -160,7 +187,11 @@ async function buildDashboardSummary(
   const maxDate = addYears(minDate, 1);
   const selectedDate = clampDate(dateValue);
   const incomeCents = await getMonthlyIncomeCents(userId);
-  const fixedTotalCents = 0;
+  const fixedExpenses = await getFixedExpenses(userId);
+  const fixedTotalCents = fixedExpenses.reduce(
+    (total, expense) => total + expense.amount_cents,
+    0,
+  );
   const percentageTotalCents = 0;
   const variableTotalCents = 0;
 
@@ -179,6 +210,7 @@ async function buildDashboardSummary(
     variableTotalCents,
     predictedBalanceCents:
       incomeCents - fixedTotalCents - percentageTotalCents - variableTotalCents,
+    fixedExpenses,
   };
 }
 
@@ -195,6 +227,18 @@ async function setupDatabase(): Promise<void> {
     CREATE TABLE IF NOT EXISTS finance_settings (
       user_id INTEGER PRIMARY KEY,
       monthly_income_cents INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS expenses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      name TEXT NOT NULL,
+      amount_cents INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id)
     )
   `);
@@ -271,6 +315,14 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
     input { padding: 10px; border: 0; border-radius: 6px; background: #2c2c2c; color: white; }
     .income-form { display: flex; align-items: end; gap: 10px; margin-bottom: 24px; }
     .income-form input { width: 180px; }
+    .panel { margin-top: 24px; padding: 20px; background: #1b1b1b; border: 1px solid #333; border-radius: 8px; }
+    .expense-form { display: grid; grid-template-columns: 1fr 180px auto; gap: 10px; align-items: end; }
+    .expense-list { width: 100%; margin-top: 16px; border-collapse: collapse; }
+    .expense-list th, .expense-list td { padding: 10px; border-top: 1px solid #333; text-align: left; }
+    .expense-list form { display: flex; gap: 8px; align-items: center; }
+    .expense-list input { width: 100%; }
+    .expense-list .amount-input { width: 140px; }
+    .actions { width: 190px; }
     .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
     .card { padding: 18px; background: #1f1f1f; border: 1px solid #333; border-radius: 8px; }
     .label { margin: 0 0 8px; color: #cfcfcf; font-size: 0.9rem; }
@@ -280,6 +332,12 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
       header, .toolbar { align-items: flex-start; flex-direction: column; }
       .income-form { align-items: stretch; flex-direction: column; }
       .income-form input { width: 100%; }
+      .expense-form { grid-template-columns: 1fr; }
+      .expense-list, .expense-list tbody, .expense-list tr, .expense-list td { display: block; width: 100%; }
+      .expense-list thead { display: none; }
+      .expense-list form { align-items: stretch; flex-direction: column; }
+      .expense-list .amount-input { width: 100%; }
+      .actions { width: auto; }
       .grid { grid-template-columns: 1fr; }
     }
   </style>
@@ -351,6 +409,53 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
         <p class="label">Saldo previsto</p>
         <p class="value">${money(summary.predictedBalanceCents)}</p>
       </article>
+    </section>
+
+    <section class="panel">
+      <h2>Gastos fixos</h2>
+      <form class="expense-form" method="POST" action="/expenses/fixed">
+        <div class="field">
+          <label for="fixedName">Nome</label>
+          <input id="fixedName" name="name" placeholder="Ex: aluguel" required>
+        </div>
+        <div class="field">
+          <label for="fixedAmount">Valor mensal</label>
+          <input id="fixedAmount" name="amount" type="number" min="0" step="0.01" required>
+        </div>
+        <button type="submit">Adicionar</button>
+      </form>
+
+      <table class="expense-list">
+        <thead>
+          <tr>
+            <th>Gasto</th>
+            <th>Valor</th>
+            <th class="actions">Acoes</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            summary.fixedExpenses.length
+              ? summary.fixedExpenses
+                  .map(
+                    (expense) => `
+                      <tr>
+                        <td colspan="3">
+                          <form method="POST" action="/expenses/${expense.id}/fixed">
+                            <input name="name" value="${escapeHtml(expense.name)}" required>
+                            <input class="amount-input" name="amount" type="number" min="0" step="0.01" value="${(expense.amount_cents / 100).toFixed(2)}" required>
+                            <button type="submit">Salvar</button>
+                            <button type="submit" formaction="/expenses/${expense.id}/delete">Remover</button>
+                          </form>
+                        </td>
+                      </tr>
+                    `,
+                  )
+                  .join("")
+              : `<tr><td colspan="3">Nenhum gasto fixo cadastrado.</td></tr>`
+          }
+        </tbody>
+      </table>
     </section>
   </main>
 </body>
@@ -451,6 +556,88 @@ app.post("/income", requireLogin, async (request, response, next) => {
       `,
       [user.id, monthlyIncomeCents],
     );
+
+    response.redirect("/dashboard");
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/expenses/fixed", requireLogin, async (request, response, next) => {
+  try {
+    const user = request.session.user;
+
+    if (!user) {
+      response.redirect("/login");
+      return;
+    }
+
+    const name = String(request.body.name ?? "").trim();
+    const amountCents = parseCurrencyToCents(request.body.amount);
+
+    if (name) {
+      await run(
+        `
+          INSERT INTO expenses (user_id, type, name, amount_cents)
+          VALUES (?, 'fixed', ?, ?)
+        `,
+        [user.id, name, amountCents],
+      );
+    }
+
+    response.redirect("/dashboard");
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/expenses/:id/fixed", requireLogin, async (request, response, next) => {
+  try {
+    const user = request.session.user;
+
+    if (!user) {
+      response.redirect("/login");
+      return;
+    }
+
+    const expenseId = Number(request.params.id);
+    const name = String(request.body.name ?? "").trim();
+    const amountCents = parseCurrencyToCents(request.body.amount);
+
+    if (Number.isInteger(expenseId) && name) {
+      await run(
+        `
+          UPDATE expenses
+          SET name = ?, amount_cents = ?
+          WHERE id = ? AND user_id = ? AND type = 'fixed'
+        `,
+        [name, amountCents, expenseId, user.id],
+      );
+    }
+
+    response.redirect("/dashboard");
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/expenses/:id/delete", requireLogin, async (request, response, next) => {
+  try {
+    const user = request.session.user;
+
+    if (!user) {
+      response.redirect("/login");
+      return;
+    }
+
+    const expenseId = Number(request.params.id);
+
+    if (Number.isInteger(expenseId)) {
+      await run("DELETE FROM expenses WHERE id = ? AND user_id = ?", [
+        expenseId,
+        user.id,
+      ]);
+    }
 
     response.redirect("/dashboard");
   } catch (error) {
