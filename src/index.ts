@@ -66,13 +66,50 @@ interface DashboardSummary {
   projectionMonths: ProjectionMonth[];
 }
 
+function loadEnvFile(): void {
+  const envPath = path.join(__dirname, "..", ".env");
+
+  if (!fs.existsSync(envPath)) {
+    return;
+  }
+
+  const lines = fs.readFileSync(envPath, "utf8").split(/\r?\n/);
+
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+
+    if (!trimmedLine || trimmedLine.startsWith("#")) {
+      continue;
+    }
+
+    const separatorIndex = trimmedLine.indexOf("=");
+
+    if (separatorIndex === -1) {
+      continue;
+    }
+
+    const key = trimmedLine.slice(0, separatorIndex).trim();
+    const value = trimmedLine.slice(separatorIndex + 1).trim();
+
+    if (key && process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
+
+loadEnvFile();
+
 const app = express();
 const SQLiteStore = connectSqlite3(session);
 const PORT = Number(process.env.PORT ?? 3000);
-const SESSION_SECRET =
-  process.env.SESSION_SECRET ?? "dev-secret-change-before-production";
+const SESSION_SECRET = process.env.SESSION_SECRET;
+const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD;
 const DATA_DIR = path.join(__dirname, "..", "data");
 const DB_PATH = path.join(DATA_DIR, "financemanager.sqlite");
+
+if (!SESSION_SECRET) {
+  throw new Error("Defina SESSION_SECRET antes de iniciar o servidor.");
+}
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 sqlite3.verbose();
@@ -368,12 +405,16 @@ async function setupDatabase(): Promise<void> {
     "admin",
   ]);
 
-  if (!admin) {
-    const passwordHash = await bcrypt.hash("senhaqtuvaiusar", 12);
+  if (!admin && DEFAULT_ADMIN_PASSWORD) {
+    const passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 12);
     await run("INSERT INTO users (username, password_hash) VALUES (?, ?)", [
       "admin",
       passwordHash,
     ]);
+  } else if (!admin) {
+    console.warn(
+      "Nenhum usuario admin criado. Defina DEFAULT_ADMIN_PASSWORD no ambiente.",
+    );
   }
 }
 
@@ -1060,6 +1101,5 @@ app.post("/logout", requireLogin, (request, response, next) => {
 setupDatabase().then(() => {
   app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
-    console.log("Default login: admin / senhaqtuvaiusar");
   });
 });
