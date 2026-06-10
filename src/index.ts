@@ -31,6 +31,12 @@ interface Expense {
   amount_cents: number;
 }
 
+interface PercentageExpense {
+  id: number;
+  name: string;
+  percentage_basis_points: number;
+}
+
 interface DashboardSummary {
   selectedDate: Date;
   minDate: string;
@@ -43,6 +49,7 @@ interface DashboardSummary {
   variableTotalCents: number;
   predictedBalanceCents: number;
   fixedExpenses: Expense[];
+  percentageExpenses: PercentageExpense[];
 }
 
 const app = express();
@@ -78,6 +85,11 @@ function all<T>(sql: string, params: unknown[] = []): Promise<T[]> {
       error ? reject(error) : resolve(rows as T[]),
     );
   });
+}
+
+async function hasColumn(tableName: string, columnName: string): Promise<boolean> {
+  const columns = await all<{ name: string }>(`PRAGMA table_info(${tableName})`);
+  return columns.some((column) => column.name === columnName);
 }
 
 function escapeHtml(value: string): string {
@@ -150,10 +162,31 @@ function parseCurrencyToCents(value: unknown): number {
   return Math.round(amount * 100);
 }
 
+function parsePercentageToBasisPoints(value: unknown): number {
+  const normalizedValue = String(value ?? "")
+    .trim()
+    .replace(",", ".")
+    .replace(/[^\d.]/g, "");
+  const percentage = Number(normalizedValue);
+
+  if (!Number.isFinite(percentage) || percentage < 0) {
+    return 0;
+  }
+
+  return Math.round(percentage * 100);
+}
+
 function money(cents: number): string {
   return (cents / 100).toLocaleString("pt-BR", {
     style: "currency",
     currency: "BRL",
+  });
+}
+
+function percentageLabel(basisPoints: number): string {
+  return (basisPoints / 100).toLocaleString("pt-BR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
   });
 }
 
@@ -178,6 +211,20 @@ async function getFixedExpenses(userId: number): Promise<Expense[]> {
   );
 }
 
+async function getPercentageExpenses(
+  userId: number,
+): Promise<PercentageExpense[]> {
+  return all<PercentageExpense>(
+    `
+      SELECT id, name, percentage_basis_points
+      FROM expenses
+      WHERE user_id = ? AND type = 'percentage'
+      ORDER BY name
+    `,
+    [userId],
+  );
+}
+
 async function buildDashboardSummary(
   userId: number,
   dateValue: unknown,
@@ -188,11 +235,16 @@ async function buildDashboardSummary(
   const selectedDate = clampDate(dateValue);
   const incomeCents = await getMonthlyIncomeCents(userId);
   const fixedExpenses = await getFixedExpenses(userId);
+  const percentageExpenses = await getPercentageExpenses(userId);
   const fixedTotalCents = fixedExpenses.reduce(
     (total, expense) => total + expense.amount_cents,
     0,
   );
-  const percentageTotalCents = 0;
+  const percentageTotalCents = percentageExpenses.reduce(
+    (total, expense) =>
+      total + Math.round((incomeCents * expense.percentage_basis_points) / 10000),
+    0,
+  );
   const variableTotalCents = 0;
 
   return {
@@ -211,6 +263,7 @@ async function buildDashboardSummary(
     predictedBalanceCents:
       incomeCents - fixedTotalCents - percentageTotalCents - variableTotalCents,
     fixedExpenses,
+    percentageExpenses,
   };
 }
 
@@ -238,10 +291,17 @@ async function setupDatabase(): Promise<void> {
       type TEXT NOT NULL,
       name TEXT NOT NULL,
       amount_cents INTEGER NOT NULL DEFAULT 0,
+      percentage_basis_points INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id)
     )
   `);
+
+  if (!(await hasColumn("expenses", "percentage_basis_points"))) {
+    await run(
+      "ALTER TABLE expenses ADD COLUMN percentage_basis_points INTEGER NOT NULL DEFAULT 0",
+    );
+  }
 
   const admin = await get<User>("SELECT * FROM users WHERE username = ?", [
     "admin",
@@ -457,6 +517,60 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
         </tbody>
       </table>
     </section>
+
+    <section class="panel">
+      <h2>Gastos percentuais</h2>
+      <form class="expense-form" method="POST" action="/expenses/percentage">
+        <div class="field">
+          <label for="percentageName">Nome</label>
+          <input id="percentageName" name="name" placeholder="Ex: investimento" required>
+        </div>
+        <div class="field">
+          <label for="percentageValue">Percentual da renda</label>
+          <input id="percentageValue" name="percentage" type="number" min="0" max="100" step="0.01" required>
+        </div>
+        <button type="submit">Adicionar</button>
+      </form>
+
+      <table class="expense-list">
+        <thead>
+          <tr>
+            <th>Gasto</th>
+            <th>Percentual</th>
+            <th>Valor calculado</th>
+            <th class="actions">Acoes</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            summary.percentageExpenses.length
+              ? summary.percentageExpenses
+                  .map((expense) => {
+                    const calculatedValue = Math.round(
+                      (summary.incomeCents * expense.percentage_basis_points) /
+                        10000,
+                    );
+
+                    return `
+                      <tr>
+                        <td colspan="4">
+                          <form method="POST" action="/expenses/${expense.id}/percentage">
+                            <input name="name" value="${escapeHtml(expense.name)}" required>
+                            <input class="amount-input" name="percentage" type="number" min="0" max="100" step="0.01" value="${(expense.percentage_basis_points / 100).toFixed(2)}" required>
+                            <span>${percentageLabel(expense.percentage_basis_points)}% = ${money(calculatedValue)}</span>
+                            <button type="submit">Salvar</button>
+                            <button type="submit" formaction="/expenses/${expense.id}/delete">Remover</button>
+                          </form>
+                        </td>
+                      </tr>
+                    `;
+                  })
+                  .join("")
+              : `<tr><td colspan="4">Nenhum gasto percentual cadastrado.</td></tr>`
+          }
+        </tbody>
+      </table>
+    </section>
   </main>
 </body>
 </html>`;
@@ -620,6 +734,78 @@ app.post("/expenses/:id/fixed", requireLogin, async (request, response, next) =>
     next(error);
   }
 });
+
+app.post("/expenses/percentage", requireLogin, async (request, response, next) => {
+  try {
+    const user = request.session.user;
+
+    if (!user) {
+      response.redirect("/login");
+      return;
+    }
+
+    const name = String(request.body.name ?? "").trim();
+    const percentageBasisPoints = parsePercentageToBasisPoints(
+      request.body.percentage,
+    );
+
+    if (name) {
+      await run(
+        `
+          INSERT INTO expenses (
+            user_id,
+            type,
+            name,
+            amount_cents,
+            percentage_basis_points
+          )
+          VALUES (?, 'percentage', ?, 0, ?)
+        `,
+        [user.id, name, percentageBasisPoints],
+      );
+    }
+
+    response.redirect("/dashboard");
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post(
+  "/expenses/:id/percentage",
+  requireLogin,
+  async (request, response, next) => {
+    try {
+      const user = request.session.user;
+
+      if (!user) {
+        response.redirect("/login");
+        return;
+      }
+
+      const expenseId = Number(request.params.id);
+      const name = String(request.body.name ?? "").trim();
+      const percentageBasisPoints = parsePercentageToBasisPoints(
+        request.body.percentage,
+      );
+
+      if (Number.isInteger(expenseId) && name) {
+        await run(
+          `
+            UPDATE expenses
+            SET name = ?, percentage_basis_points = ?
+            WHERE id = ? AND user_id = ? AND type = 'percentage'
+          `,
+          [name, percentageBasisPoints, expenseId, user.id],
+        );
+      }
+
+      response.redirect("/dashboard");
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 app.post("/expenses/:id/delete", requireLogin, async (request, response, next) => {
   try {
