@@ -21,6 +21,19 @@ interface User {
   password_hash: string;
 }
 
+interface DashboardSummary {
+  selectedDate: Date;
+  minDate: string;
+  maxDate: string;
+  monthLabel: string;
+  monthsAhead: number;
+  income: number;
+  fixedTotal: number;
+  percentageTotal: number;
+  variableTotal: number;
+  predictedBalance: number;
+}
+
 const app = express();
 const SQLiteStore = connectSqlite3(session);
 const PORT = Number(process.env.PORT ?? 3000);
@@ -55,6 +68,75 @@ function escapeHtml(value: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function toInputDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function addYears(date: Date, years: number): Date {
+  const nextDate = new Date(date);
+  nextDate.setFullYear(nextDate.getFullYear() + years);
+  return nextDate;
+}
+
+function clampDate(dateValue: unknown): Date {
+  const today = new Date();
+  const minDate = new Date(toInputDate(today));
+  const maxDate = addYears(minDate, 1);
+  const requestedDate = new Date(String(dateValue ?? toInputDate(minDate)));
+
+  if (Number.isNaN(requestedDate.getTime()) || requestedDate < minDate) {
+    return minDate;
+  }
+
+  if (requestedDate > maxDate) {
+    return maxDate;
+  }
+
+  return requestedDate;
+}
+
+function monthsBetween(startDate: Date, endDate: Date): number {
+  return (
+    (endDate.getFullYear() - startDate.getFullYear()) * 12 +
+    endDate.getMonth() -
+    startDate.getMonth()
+  );
+}
+
+function money(value: number): string {
+  return value.toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
+}
+
+function buildDashboardSummary(dateValue: unknown): DashboardSummary {
+  const today = new Date();
+  const minDate = new Date(toInputDate(today));
+  const maxDate = addYears(minDate, 1);
+  const selectedDate = clampDate(dateValue);
+  const income = 0;
+  const fixedTotal = 0;
+  const percentageTotal = 0;
+  const variableTotal = 0;
+
+  return {
+    selectedDate,
+    minDate: toInputDate(minDate),
+    maxDate: toInputDate(maxDate),
+    monthLabel: selectedDate.toLocaleDateString("pt-BR", {
+      month: "long",
+      year: "numeric",
+    }),
+    monthsAhead: Math.max(0, monthsBetween(minDate, selectedDate)),
+    income,
+    fixedTotal,
+    percentageTotal,
+    variableTotal,
+    predictedBalance: income - fixedTotal - percentageTotal - variableTotal,
+  };
 }
 
 async function setupDatabase(): Promise<void> {
@@ -121,7 +203,7 @@ function loginPage(error = "", username = ""): string {
 </html>`;
 }
 
-function dashboardPage(username: string): string {
+function dashboardPage(username: string, summary: DashboardSummary): string {
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -132,7 +214,19 @@ function dashboardPage(username: string): string {
     body { margin: 0; font-family: Arial, sans-serif; background: #121212; color: white; }
     header { display: flex; justify-content: space-between; align-items: center; padding: 14px 24px; background: #000; }
     button { padding: 8px 14px; border: 0; border-radius: 6px; background: #707070; color: white; cursor: pointer; }
-    main { padding: 32px; text-align: center; }
+    main { width: min(1100px, calc(100vw - 32px)); margin: 0 auto; padding: 32px 0; }
+    .toolbar { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+    .field label { display: block; margin-bottom: 8px; color: #cfcfcf; }
+    input { padding: 10px; border: 0; border-radius: 6px; background: #2c2c2c; color: white; }
+    .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+    .card { padding: 18px; background: #1f1f1f; border: 1px solid #333; border-radius: 8px; }
+    .label { margin: 0 0 8px; color: #cfcfcf; font-size: 0.9rem; }
+    .value { margin: 0; font-size: 1.35rem; font-weight: bold; }
+    .note { color: #cfcfcf; }
+    @media (max-width: 850px) {
+      header, .toolbar { align-items: flex-start; flex-direction: column; }
+      .grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -144,8 +238,49 @@ function dashboardPage(username: string): string {
     </form>
   </header>
   <main>
-    <h1>Bem vindo a pagina protegida!</h1>
-    <p>Voce esta logado.</p>
+    <section class="toolbar">
+      <div>
+        <h1>Resumo financeiro</h1>
+        <p class="note">Previsao para ${escapeHtml(summary.monthLabel)} (${summary.monthsAhead} mes(es) a frente).</p>
+      </div>
+      <form method="GET" action="/dashboard">
+        <div class="field">
+          <label for="date">Selecionar data</label>
+          <input
+            id="date"
+            name="date"
+            type="date"
+            min="${summary.minDate}"
+            max="${summary.maxDate}"
+            value="${toInputDate(summary.selectedDate)}"
+            onchange="this.form.submit()"
+          >
+        </div>
+      </form>
+    </section>
+
+    <section class="grid" aria-label="Previsao financeira">
+      <article class="card">
+        <p class="label">Renda total</p>
+        <p class="value">${money(summary.income)}</p>
+      </article>
+      <article class="card">
+        <p class="label">Gastos fixos</p>
+        <p class="value">${money(summary.fixedTotal)}</p>
+      </article>
+      <article class="card">
+        <p class="label">Gastos percentuais</p>
+        <p class="value">${money(summary.percentageTotal)}</p>
+      </article>
+      <article class="card">
+        <p class="label">Gastos variaveis</p>
+        <p class="value">${money(summary.variableTotal)}</p>
+      </article>
+      <article class="card">
+        <p class="label">Saldo previsto</p>
+        <p class="value">${money(summary.predictedBalance)}</p>
+      </article>
+    </section>
   </main>
 </body>
 </html>`;
@@ -210,7 +345,8 @@ app.post("/login", async (request, response, next) => {
 });
 
 app.get("/dashboard", requireLogin, (request, response) => {
-  response.send(dashboardPage(request.session.user?.username ?? ""));
+  const summary = buildDashboardSummary(request.query.date);
+  response.send(dashboardPage(request.session.user?.username ?? "", summary));
 });
 
 app.post("/logout", requireLogin, (request, response, next) => {
