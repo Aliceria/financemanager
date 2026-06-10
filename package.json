@@ -1,0 +1,27 @@
+{
+  "name": "financemanager",
+  "version": "1.0.0",
+  "description": "Simple finance manager authentication template using Node.js, TypeScript, Express sessions, cookies, and SQLite.",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "connect-sqlite3": "^0.9.16",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1",
+    "sqlite3": "^5.1.7"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/connect-sqlite3": "^0.9.5",
+    "@types/express": "^4.17.21",
+    "@types/express-session": "^1.18.1",
+    "@types/node": "^22.10.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
