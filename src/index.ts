@@ -21,17 +21,21 @@ interface User {
   password_hash: string;
 }
 
+interface FinanceSettings {
+  monthly_income_cents: number;
+}
+
 interface DashboardSummary {
   selectedDate: Date;
   minDate: string;
   maxDate: string;
   monthLabel: string;
   monthsAhead: number;
-  income: number;
-  fixedTotal: number;
-  percentageTotal: number;
-  variableTotal: number;
-  predictedBalance: number;
+  incomeCents: number;
+  fixedTotalCents: number;
+  percentageTotalCents: number;
+  variableTotalCents: number;
+  predictedBalanceCents: number;
 }
 
 const app = express();
@@ -105,22 +109,60 @@ function monthsBetween(startDate: Date, endDate: Date): number {
   );
 }
 
-function money(value: number): string {
-  return value.toLocaleString("pt-BR", {
+function parseCurrencyToCents(value: unknown): number {
+  const rawValue = String(value ?? "")
+    .trim()
+    .replace(/[^\d.,]/g, "");
+  const lastComma = rawValue.lastIndexOf(",");
+  const lastDot = rawValue.lastIndexOf(".");
+  let normalizedValue = rawValue;
+
+  if (lastComma >= 0 && lastDot >= 0) {
+    normalizedValue =
+      lastComma > lastDot
+        ? rawValue.replace(/\./g, "").replace(",", ".")
+        : rawValue.replace(/,/g, "");
+  } else if (lastComma >= 0) {
+    normalizedValue = rawValue.replace(",", ".");
+  }
+
+  const amount = Number(normalizedValue);
+
+  if (!Number.isFinite(amount) || amount < 0) {
+    return 0;
+  }
+
+  return Math.round(amount * 100);
+}
+
+function money(cents: number): string {
+  return (cents / 100).toLocaleString("pt-BR", {
     style: "currency",
     currency: "BRL",
   });
 }
 
-function buildDashboardSummary(dateValue: unknown): DashboardSummary {
+async function getMonthlyIncomeCents(userId: number): Promise<number> {
+  const settings = await get<FinanceSettings>(
+    "SELECT monthly_income_cents FROM finance_settings WHERE user_id = ?",
+    [userId],
+  );
+
+  return settings?.monthly_income_cents ?? 0;
+}
+
+async function buildDashboardSummary(
+  userId: number,
+  dateValue: unknown,
+): Promise<DashboardSummary> {
   const today = new Date();
   const minDate = new Date(toInputDate(today));
   const maxDate = addYears(minDate, 1);
   const selectedDate = clampDate(dateValue);
-  const income = 0;
-  const fixedTotal = 0;
-  const percentageTotal = 0;
-  const variableTotal = 0;
+  const incomeCents = await getMonthlyIncomeCents(userId);
+  const fixedTotalCents = 0;
+  const percentageTotalCents = 0;
+  const variableTotalCents = 0;
 
   return {
     selectedDate,
@@ -131,11 +173,12 @@ function buildDashboardSummary(dateValue: unknown): DashboardSummary {
       year: "numeric",
     }),
     monthsAhead: Math.max(0, monthsBetween(minDate, selectedDate)),
-    income,
-    fixedTotal,
-    percentageTotal,
-    variableTotal,
-    predictedBalance: income - fixedTotal - percentageTotal - variableTotal,
+    incomeCents,
+    fixedTotalCents,
+    percentageTotalCents,
+    variableTotalCents,
+    predictedBalanceCents:
+      incomeCents - fixedTotalCents - percentageTotalCents - variableTotalCents,
   };
 }
 
@@ -145,6 +188,14 @@ async function setupDatabase(): Promise<void> {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS finance_settings (
+      user_id INTEGER PRIMARY KEY,
+      monthly_income_cents INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (user_id) REFERENCES users(id)
     )
   `);
 
@@ -218,6 +269,8 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
     .toolbar { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
     .field label { display: block; margin-bottom: 8px; color: #cfcfcf; }
     input { padding: 10px; border: 0; border-radius: 6px; background: #2c2c2c; color: white; }
+    .income-form { display: flex; align-items: end; gap: 10px; margin-bottom: 24px; }
+    .income-form input { width: 180px; }
     .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
     .card { padding: 18px; background: #1f1f1f; border: 1px solid #333; border-radius: 8px; }
     .label { margin: 0 0 8px; color: #cfcfcf; font-size: 0.9rem; }
@@ -225,6 +278,8 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
     .note { color: #cfcfcf; }
     @media (max-width: 850px) {
       header, .toolbar { align-items: flex-start; flex-direction: column; }
+      .income-form { align-items: stretch; flex-direction: column; }
+      .income-form input { width: 100%; }
       .grid { grid-template-columns: 1fr; }
     }
   </style>
@@ -259,26 +314,42 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
       </form>
     </section>
 
+    <form class="income-form" method="POST" action="/income">
+      <div class="field">
+        <label for="monthlyIncome">Renda mensal total</label>
+        <input
+          id="monthlyIncome"
+          name="monthlyIncome"
+          type="number"
+          min="0"
+          step="0.01"
+          value="${(summary.incomeCents / 100).toFixed(2)}"
+          required
+        >
+      </div>
+      <button type="submit">Salvar renda</button>
+    </form>
+
     <section class="grid" aria-label="Previsao financeira">
       <article class="card">
         <p class="label">Renda total</p>
-        <p class="value">${money(summary.income)}</p>
+        <p class="value">${money(summary.incomeCents)}</p>
       </article>
       <article class="card">
         <p class="label">Gastos fixos</p>
-        <p class="value">${money(summary.fixedTotal)}</p>
+        <p class="value">${money(summary.fixedTotalCents)}</p>
       </article>
       <article class="card">
         <p class="label">Gastos percentuais</p>
-        <p class="value">${money(summary.percentageTotal)}</p>
+        <p class="value">${money(summary.percentageTotalCents)}</p>
       </article>
       <article class="card">
         <p class="label">Gastos variaveis</p>
-        <p class="value">${money(summary.variableTotal)}</p>
+        <p class="value">${money(summary.variableTotalCents)}</p>
       </article>
       <article class="card">
         <p class="label">Saldo previsto</p>
-        <p class="value">${money(summary.predictedBalance)}</p>
+        <p class="value">${money(summary.predictedBalanceCents)}</p>
       </article>
     </section>
   </main>
@@ -344,9 +415,47 @@ app.post("/login", async (request, response, next) => {
   }
 });
 
-app.get("/dashboard", requireLogin, (request, response) => {
-  const summary = buildDashboardSummary(request.query.date);
-  response.send(dashboardPage(request.session.user?.username ?? "", summary));
+app.get("/dashboard", requireLogin, async (request, response, next) => {
+  try {
+    const user = request.session.user;
+
+    if (!user) {
+      response.redirect("/login");
+      return;
+    }
+
+    const summary = await buildDashboardSummary(user.id, request.query.date);
+    response.send(dashboardPage(user.username, summary));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/income", requireLogin, async (request, response, next) => {
+  try {
+    const user = request.session.user;
+
+    if (!user) {
+      response.redirect("/login");
+      return;
+    }
+
+    const monthlyIncomeCents = parseCurrencyToCents(request.body.monthlyIncome);
+
+    await run(
+      `
+        INSERT INTO finance_settings (user_id, monthly_income_cents)
+        VALUES (?, ?)
+        ON CONFLICT(user_id)
+        DO UPDATE SET monthly_income_cents = excluded.monthly_income_cents
+      `,
+      [user.id, monthlyIncomeCents],
+    );
+
+    response.redirect("/dashboard");
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post("/logout", requireLogin, (request, response, next) => {
