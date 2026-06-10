@@ -461,6 +461,73 @@ function loginPage(error = "", username = ""): string {
 }
 
 function dashboardPage(username: string, summary: DashboardSummary): string {
+  const fixedRows = summary.fixedExpenses.length
+    ? summary.fixedExpenses
+        .map(
+          (expense) => `
+            <form class="item-row" method="POST" action="/expenses/${expense.id}/fixed">
+              <input name="name" value="${escapeHtml(expense.name)}" required>
+              <input class="money-input" name="amount" type="number" min="0" step="0.01" value="${(expense.amount_cents / 100).toFixed(2)}" required>
+              <button type="submit">Salvar</button>
+              <button type="submit" formaction="/expenses/${expense.id}/delete">Remover</button>
+            </form>
+          `,
+        )
+        .join("")
+    : `<p class="empty">Nenhum gasto fixo cadastrado.</p>`;
+
+  const percentageRows = summary.percentageExpenses.length
+    ? summary.percentageExpenses
+        .map((expense) => {
+          const calculatedValue = Math.round(
+            (summary.incomeCents * expense.percentage_basis_points) / 10000,
+          );
+
+          return `
+            <form class="item-row percentage-row" method="POST" action="/expenses/${expense.id}/percentage">
+              <input name="name" value="${escapeHtml(expense.name)}" required>
+              <input class="percent-input" name="percentage" type="number" min="0" max="100" step="0.01" value="${(expense.percentage_basis_points / 100).toFixed(2)}" required>
+              <span>${percentageLabel(expense.percentage_basis_points)}% = ${money(calculatedValue)}</span>
+              <button type="submit">Salvar</button>
+              <button type="submit" formaction="/expenses/${expense.id}/delete">Remover</button>
+            </form>
+          `;
+        })
+        .join("")
+    : `<p class="empty">Nenhum gasto percentual cadastrado.</p>`;
+
+  const variableRows = summary.variableExpenses.length
+    ? summary.variableExpenses
+        .map(
+          (expense) => `
+            <form class="item-row" method="POST" action="/expenses/${expense.id}/variable">
+              <input name="name" value="${escapeHtml(expense.name)}" required>
+              <input class="money-input" name="amount" type="number" min="0" step="0.01" value="${(expense.amount_cents / 100).toFixed(2)}" required>
+              <button type="submit">Salvar</button>
+              <button type="submit" formaction="/expenses/${expense.id}/delete">Remover</button>
+            </form>
+          `,
+        )
+        .join("")
+    : `<p class="empty">Nenhum gasto variavel cadastrado.</p>`;
+
+  const projectionRows = summary.projectionMonths
+    .map(
+      (month) => `
+        <tr>
+          <td>${escapeHtml(month.label)}</td>
+          <td>${money(month.incomeCents)}</td>
+          <td>${money(month.fixedTotalCents)}</td>
+          <td>${money(month.percentageTotalCents)}</td>
+          <td>${money(month.variableTotalCents)}</td>
+          <td>${money(month.balanceCents)}</td>
+          <td>${money(month.accumulatedBalanceCents)}</td>
+          <td>${month.differenceCents === null ? "-" : money(month.differenceCents)}</td>
+        </tr>
+      `,
+    )
+    .join("");
+
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -468,301 +535,213 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Finance Manager</title>
   <style>
-    body { margin: 0; font-family: Arial, sans-serif; background: #121212; color: white; }
-    header { display: flex; justify-content: space-between; align-items: center; padding: 14px 24px; background: #000; }
-    button { padding: 8px 14px; border: 0; border-radius: 6px; background: #707070; color: white; cursor: pointer; }
-    main { width: min(1100px, calc(100vw - 32px)); margin: 0 auto; padding: 32px 0; }
-    .toolbar { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
-    .field label { display: block; margin-bottom: 8px; color: #cfcfcf; }
-    input { padding: 10px; border: 0; border-radius: 6px; background: #2c2c2c; color: white; }
-    .income-form { display: flex; align-items: end; gap: 10px; margin-bottom: 24px; }
-    .income-form input { width: 180px; }
-    .panel { margin-top: 24px; padding: 20px; background: #1b1b1b; border: 1px solid #333; border-radius: 8px; }
-    .expense-form { display: grid; grid-template-columns: 1fr 180px auto; gap: 10px; align-items: end; }
-    .expense-list { width: 100%; margin-top: 16px; border-collapse: collapse; }
-    .expense-list th, .expense-list td { padding: 10px; border-top: 1px solid #333; text-align: left; }
-    .expense-list form { display: flex; gap: 8px; align-items: center; }
-    .expense-list input { width: 100%; }
-    .expense-list .amount-input { width: 140px; }
-    .actions { width: 190px; }
-    .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
-    .card { padding: 18px; background: #1f1f1f; border: 1px solid #333; border-radius: 8px; }
-    .label { margin: 0 0 8px; color: #cfcfcf; font-size: 0.9rem; }
-    .value { margin: 0; font-size: 1.35rem; font-weight: bold; }
-    .note { color: #cfcfcf; }
-    .projection-table { width: 100%; margin-top: 16px; border-collapse: collapse; }
-    .projection-table th, .projection-table td { padding: 10px; border-top: 1px solid #333; text-align: right; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Arial, sans-serif; background: #0f0f10; color: white; }
+    button, input, summary { font: inherit; }
+    button { padding: 8px 10px; border: 0; border-radius: 6px; background: #747474; color: white; cursor: pointer; white-space: nowrap; }
+    button:hover, button:focus { background: #8a8a8a; }
+    input { min-width: 0; padding: 9px 10px; border: 1px solid #373737; border-radius: 6px; background: #202124; color: white; }
+    .topbar { min-height: 72px; display: grid; grid-template-columns: 1fr auto auto; gap: 18px; align-items: center; padding: 14px 22px; background: #000; border-bottom: 1px solid #252525; }
+    .brand { font-size: 1.45rem; font-weight: 700; }
+    .profile { padding: 9px 14px; border: 1px solid #555; border-radius: 6px; background: #111; }
+    .user-box { display: flex; gap: 12px; align-items: center; color: #e8e8e8; }
+    .user-box form { margin: 0; }
+    main { width: min(1440px, calc(100vw - 28px)); margin: 0 auto; padding: 18px 0 28px; }
+    .dashboard-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; align-items: start; }
+    .card { min-height: 230px; padding: 16px; background: #18191b; border: 1px solid #303236; border-radius: 8px; box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22); }
+    .card h2 { margin: 0; font-size: 1rem; color: #d7d7d7; }
+    .card-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; margin-bottom: 12px; }
+    .metric { margin: 6px 0 14px; font-size: 1.65rem; font-weight: 700; }
+    .small { color: #bdbdbd; font-size: 0.9rem; }
+    .income-card { grid-column: span 3; }
+    .fixed-card { grid-column: span 3; }
+    .percentage-card { grid-column: span 3; }
+    .variable-card { grid-column: span 3; }
+    .balance-card { grid-column: span 4; }
+    .forecast-card { grid-column: span 8; }
+    .item-list { display: grid; gap: 8px; max-height: 210px; overflow: auto; padding-right: 4px; }
+    .item-row { display: grid; grid-template-columns: minmax(120px, 1fr) 110px auto auto; gap: 8px; align-items: center; padding: 8px; background: #111214; border: 1px solid #292b2f; border-radius: 7px; }
+    .percentage-row { grid-template-columns: minmax(110px, 1fr) 82px minmax(115px, auto) auto auto; }
+    .money-input, .percent-input { width: 100%; }
+    .empty { margin: 8px 0 0; color: #aaa; }
+    details { margin-top: 10px; }
+    summary { display: inline-flex; padding: 7px 10px; border-radius: 6px; background: #2b2d30; cursor: pointer; color: #f2f2f2; }
+    .compact-form { display: grid; grid-template-columns: minmax(120px, 1fr) 130px auto; gap: 8px; align-items: end; margin-top: 10px; padding: 10px; background: #111214; border: 1px solid #292b2f; border-radius: 7px; }
+    .field label { display: block; margin-bottom: 6px; color: #cfcfcf; font-size: 0.82rem; }
+    .income-form { grid-template-columns: 1fr auto; }
+    .balance-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .balance-box { padding: 12px; background: #111214; border: 1px solid #292b2f; border-radius: 7px; }
+    .balance-box p { margin: 0; }
+    .balance-box strong { display: block; margin-top: 5px; font-size: 1.15rem; }
+    .date-form { display: grid; grid-template-columns: minmax(150px, 1fr) auto; gap: 8px; align-items: end; margin-bottom: 12px; }
+    .projection-wrap { max-height: 250px; overflow: auto; border: 1px solid #292b2f; border-radius: 7px; }
+    .projection-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+    .projection-table th, .projection-table td { padding: 9px; border-top: 1px solid #2c2e32; text-align: right; white-space: nowrap; }
     .projection-table th:first-child, .projection-table td:first-child { text-align: left; }
-    @media (max-width: 850px) {
-      header, .toolbar { align-items: flex-start; flex-direction: column; }
-      .income-form { align-items: stretch; flex-direction: column; }
-      .income-form input { width: 100%; }
-      .expense-form { grid-template-columns: 1fr; }
-      .expense-list, .expense-list tbody, .expense-list tr, .expense-list td { display: block; width: 100%; }
-      .expense-list thead { display: none; }
-      .expense-list form { align-items: stretch; flex-direction: column; }
-      .expense-list .amount-input { width: 100%; }
-      .actions { width: auto; }
-      .grid { grid-template-columns: 1fr; }
+    .projection-table thead th { position: sticky; top: 0; background: #202124; z-index: 1; }
+    @media (max-width: 1180px) {
+      .income-card, .fixed-card, .percentage-card, .variable-card { grid-column: span 6; }
+      .balance-card, .forecast-card { grid-column: span 12; }
+    }
+    @media (max-width: 760px) {
+      .topbar { grid-template-columns: 1fr; align-items: start; }
+      .user-box { flex-wrap: wrap; }
+      .dashboard-grid { grid-template-columns: 1fr; }
+      .income-card, .fixed-card, .percentage-card, .variable-card, .balance-card, .forecast-card { grid-column: span 1; }
+      .compact-form, .income-form, .date-form, .item-row, .percentage-row { grid-template-columns: 1fr; }
+      .balance-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
-  <header>
-    <strong>Finance Manager</strong>
-    <form method="POST" action="/logout">
-      <span>${escapeHtml(username)}</span>
+  <header class="topbar">
+    <div class="brand">Finance Manager</div>
+    <div class="profile">perfil: CASA</div>
+    <div class="user-box">
+      <span>usuario: ${escapeHtml(username)}</span>
+      <form method="POST" action="/logout">
       <button type="submit">Sair</button>
     </form>
+    </div>
   </header>
   <main>
-    <section class="toolbar">
-      <div>
-        <h1>Resumo financeiro</h1>
-        <p class="note">Previsao para ${escapeHtml(summary.monthLabel)} (${summary.monthsAhead} mes(es) a frente).</p>
-      </div>
-      <form method="GET" action="/dashboard">
-        <div class="field">
-          <label for="date">Selecionar data</label>
-          <input
-            id="date"
-            name="date"
-            type="date"
-            min="${summary.minDate}"
-            max="${summary.maxDate}"
-            value="${toInputDate(summary.selectedDate)}"
-            onchange="this.form.submit()"
-          >
+    <section class="dashboard-grid" aria-label="Dashboard financeira">
+      <article class="card income-card">
+        <div class="card-head">
+          <h2>Entrada total</h2>
         </div>
-      </form>
-    </section>
-
-    <form class="income-form" method="POST" action="/income">
-      <div class="field">
-        <label for="monthlyIncome">Renda mensal total</label>
-        <input
-          id="monthlyIncome"
-          name="monthlyIncome"
-          type="number"
-          min="0"
-          step="0.01"
-          value="${(summary.incomeCents / 100).toFixed(2)}"
-          required
-        >
-      </div>
-      <button type="submit">Salvar renda</button>
-    </form>
-
-    <section class="grid" aria-label="Previsao financeira">
-      <article class="card">
-        <p class="label">Renda total</p>
-        <p class="value">${money(summary.incomeCents)}</p>
+        <p class="metric">${money(summary.incomeCents)}</p>
+        <form class="compact-form income-form" method="POST" action="/income">
+          <div class="field">
+            <label for="monthlyIncome">Renda mensal total</label>
+            <input id="monthlyIncome" name="monthlyIncome" type="number" min="0" step="0.01" value="${(summary.incomeCents / 100).toFixed(2)}" required>
+          </div>
+          <button type="submit">Salvar</button>
+        </form>
       </article>
-      <article class="card">
-        <p class="label">Gastos fixos</p>
-        <p class="value">${money(summary.fixedTotalCents)}</p>
+
+      <article class="card fixed-card">
+        <div class="card-head">
+          <h2>Gastos fixos</h2>
+          <strong>${money(summary.fixedTotalCents)}</strong>
+        </div>
+        <div class="item-list">${fixedRows}</div>
+        <details>
+          <summary>Adicionar</summary>
+          <form class="compact-form" method="POST" action="/expenses/fixed">
+            <div class="field">
+              <label for="fixedName">Nome</label>
+              <input id="fixedName" name="name" placeholder="Ex: aluguel" required>
+            </div>
+            <div class="field">
+              <label for="fixedAmount">Valor</label>
+              <input id="fixedAmount" name="amount" type="number" min="0" step="0.01" required>
+            </div>
+            <button type="submit">Adicionar</button>
+          </form>
+        </details>
       </article>
-      <article class="card">
-        <p class="label">Gastos percentuais</p>
-        <p class="value">${money(summary.percentageTotalCents)}</p>
+
+      <article class="card percentage-card">
+        <div class="card-head">
+          <h2>Gastos percentuais</h2>
+          <strong>${money(summary.percentageTotalCents)}</strong>
+        </div>
+        <div class="item-list">${percentageRows}</div>
+        <details>
+          <summary>Adicionar</summary>
+          <form class="compact-form" method="POST" action="/expenses/percentage">
+            <div class="field">
+              <label for="percentageName">Nome</label>
+              <input id="percentageName" name="name" placeholder="Ex: reserva" required>
+            </div>
+            <div class="field">
+              <label for="percentageValue">Percentual</label>
+              <input id="percentageValue" name="percentage" type="number" min="0" max="100" step="0.01" required>
+            </div>
+            <button type="submit">Adicionar</button>
+          </form>
+        </details>
       </article>
-      <article class="card">
-        <p class="label">Gastos variaveis</p>
-        <p class="value">${money(summary.variableTotalCents)}</p>
+
+      <article class="card variable-card">
+        <div class="card-head">
+          <h2>Gastos variaveis</h2>
+          <strong>${money(summary.variableTotalCents)}</strong>
+        </div>
+        <div class="item-list">${variableRows}</div>
+        <details>
+          <summary>Adicionar</summary>
+          <form class="compact-form" method="POST" action="/expenses/variable">
+            <div class="field">
+              <label for="variableName">Nome</label>
+              <input id="variableName" name="name" placeholder="Ex: mercado" required>
+            </div>
+            <div class="field">
+              <label for="variableAmount">Valor atual</label>
+              <input id="variableAmount" name="amount" type="number" min="0" step="0.01" required>
+            </div>
+            <button type="submit">Adicionar</button>
+          </form>
+        </details>
+        <p class="small">O ultimo valor salvo vale para os proximos meses.</p>
       </article>
-      <article class="card">
-        <p class="label">Saldo previsto</p>
-        <p class="value">${money(summary.predictedBalanceCents)}</p>
+
+      <article class="card balance-card">
+        <div class="card-head">
+          <h2>Balanca / resumo</h2>
+          <span class="small">${escapeHtml(summary.monthLabel)}</span>
+        </div>
+        <div class="balance-grid">
+          <div class="balance-box">
+            <p>Saldo mensal</p>
+            <strong>${money(summary.predictedBalanceCents)}</strong>
+          </div>
+          <div class="balance-box">
+            <p>Saldo acumulado</p>
+            <strong>${money(summary.accumulatedBalanceCents)}</strong>
+          </div>
+          <div class="balance-box">
+            <p>Total de gastos</p>
+            <strong>${money(summary.fixedTotalCents + summary.percentageTotalCents + summary.variableTotalCents)}</strong>
+          </div>
+          <div class="balance-box">
+            <p>Periodo</p>
+            <strong>${summary.monthsAhead} mes(es)</strong>
+          </div>
+        </div>
       </article>
-      <article class="card">
-        <p class="label">Saldo acumulado</p>
-        <p class="value">${money(summary.accumulatedBalanceCents)}</p>
+
+      <article class="card forecast-card">
+        <div class="card-head">
+          <h2>Previsao por data</h2>
+          <span class="small">ate ${escapeHtml(summary.monthLabel)}</span>
+        </div>
+        <form class="date-form" method="GET" action="/dashboard">
+          <div class="field">
+            <label for="date">Selecionar data</label>
+            <input id="date" name="date" type="date" min="${summary.minDate}" max="${summary.maxDate}" value="${toInputDate(summary.selectedDate)}" onchange="this.form.submit()">
+          </div>
+          <button type="submit">Ver</button>
+        </form>
+        <div class="projection-wrap">
+          <table class="projection-table">
+            <thead>
+              <tr>
+                <th>Mes</th>
+                <th>Renda</th>
+                <th>Fixos</th>
+                <th>Percentuais</th>
+                <th>Variaveis</th>
+                <th>Saldo</th>
+                <th>Acumulado</th>
+                <th>Diferenca</th>
+              </tr>
+            </thead>
+            <tbody>${projectionRows}</tbody>
+          </table>
+        </div>
       </article>
-    </section>
-
-    <section class="panel">
-      <h2>Previsao mes a mes</h2>
-      <table class="projection-table">
-        <thead>
-          <tr>
-            <th>Mes</th>
-            <th>Renda</th>
-            <th>Fixos</th>
-            <th>Percentuais</th>
-            <th>Variaveis</th>
-            <th>Saldo</th>
-            <th>Acumulado</th>
-            <th>Diferenca</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${summary.projectionMonths
-            .map(
-              (month) => `
-                <tr>
-                  <td>${escapeHtml(month.label)}</td>
-                  <td>${money(month.incomeCents)}</td>
-                  <td>${money(month.fixedTotalCents)}</td>
-                  <td>${money(month.percentageTotalCents)}</td>
-                  <td>${money(month.variableTotalCents)}</td>
-                  <td>${money(month.balanceCents)}</td>
-                  <td>${money(month.accumulatedBalanceCents)}</td>
-                  <td>${month.differenceCents === null ? "-" : money(month.differenceCents)}</td>
-                </tr>
-              `,
-            )
-            .join("")}
-        </tbody>
-      </table>
-    </section>
-
-    <section class="panel">
-      <h2>Gastos fixos</h2>
-      <form class="expense-form" method="POST" action="/expenses/fixed">
-        <div class="field">
-          <label for="fixedName">Nome</label>
-          <input id="fixedName" name="name" placeholder="Ex: aluguel" required>
-        </div>
-        <div class="field">
-          <label for="fixedAmount">Valor mensal</label>
-          <input id="fixedAmount" name="amount" type="number" min="0" step="0.01" required>
-        </div>
-        <button type="submit">Adicionar</button>
-      </form>
-
-      <table class="expense-list">
-        <thead>
-          <tr>
-            <th>Gasto</th>
-            <th>Valor</th>
-            <th class="actions">Acoes</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${
-            summary.fixedExpenses.length
-              ? summary.fixedExpenses
-                  .map(
-                    (expense) => `
-                      <tr>
-                        <td colspan="3">
-                          <form method="POST" action="/expenses/${expense.id}/fixed">
-                            <input name="name" value="${escapeHtml(expense.name)}" required>
-                            <input class="amount-input" name="amount" type="number" min="0" step="0.01" value="${(expense.amount_cents / 100).toFixed(2)}" required>
-                            <button type="submit">Salvar</button>
-                            <button type="submit" formaction="/expenses/${expense.id}/delete">Remover</button>
-                          </form>
-                        </td>
-                      </tr>
-                    `,
-                  )
-                  .join("")
-              : `<tr><td colspan="3">Nenhum gasto fixo cadastrado.</td></tr>`
-          }
-        </tbody>
-      </table>
-    </section>
-
-    <section class="panel">
-      <h2>Gastos percentuais</h2>
-      <form class="expense-form" method="POST" action="/expenses/percentage">
-        <div class="field">
-          <label for="percentageName">Nome</label>
-          <input id="percentageName" name="name" placeholder="Ex: investimento" required>
-        </div>
-        <div class="field">
-          <label for="percentageValue">Percentual da renda</label>
-          <input id="percentageValue" name="percentage" type="number" min="0" max="100" step="0.01" required>
-        </div>
-        <button type="submit">Adicionar</button>
-      </form>
-
-      <table class="expense-list">
-        <thead>
-          <tr>
-            <th>Gasto</th>
-            <th>Percentual</th>
-            <th>Valor calculado</th>
-            <th class="actions">Acoes</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${
-            summary.percentageExpenses.length
-              ? summary.percentageExpenses
-                  .map((expense) => {
-                    const calculatedValue = Math.round(
-                      (summary.incomeCents * expense.percentage_basis_points) /
-                        10000,
-                    );
-
-                    return `
-                      <tr>
-                        <td colspan="4">
-                          <form method="POST" action="/expenses/${expense.id}/percentage">
-                            <input name="name" value="${escapeHtml(expense.name)}" required>
-                            <input class="amount-input" name="percentage" type="number" min="0" max="100" step="0.01" value="${(expense.percentage_basis_points / 100).toFixed(2)}" required>
-                            <span>${percentageLabel(expense.percentage_basis_points)}% = ${money(calculatedValue)}</span>
-                            <button type="submit">Salvar</button>
-                            <button type="submit" formaction="/expenses/${expense.id}/delete">Remover</button>
-                          </form>
-                        </td>
-                      </tr>
-                    `;
-                  })
-                  .join("")
-              : `<tr><td colspan="4">Nenhum gasto percentual cadastrado.</td></tr>`
-          }
-        </tbody>
-      </table>
-    </section>
-
-    <section class="panel">
-      <h2>Gastos variaveis mensais</h2>
-      <form class="expense-form" method="POST" action="/expenses/variable">
-        <div class="field">
-          <label for="variableName">Nome</label>
-          <input id="variableName" name="name" placeholder="Ex: mercado" required>
-        </div>
-        <div class="field">
-          <label for="variableAmount">Valor mensal atual</label>
-          <input id="variableAmount" name="amount" type="number" min="0" step="0.01" required>
-        </div>
-        <button type="submit">Adicionar</button>
-      </form>
-
-      <table class="expense-list">
-        <thead>
-          <tr>
-            <th>Gasto</th>
-            <th>Valor atual</th>
-            <th class="actions">Acoes</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${
-            summary.variableExpenses.length
-              ? summary.variableExpenses
-                  .map(
-                    (expense) => `
-                      <tr>
-                        <td colspan="3">
-                          <form method="POST" action="/expenses/${expense.id}/variable">
-                            <input name="name" value="${escapeHtml(expense.name)}" required>
-                            <input class="amount-input" name="amount" type="number" min="0" step="0.01" value="${(expense.amount_cents / 100).toFixed(2)}" required>
-                            <button type="submit">Salvar</button>
-                            <button type="submit" formaction="/expenses/${expense.id}/delete">Remover</button>
-                          </form>
-                        </td>
-                      </tr>
-                    `,
-                  )
-                  .join("")
-              : `<tr><td colspan="3">Nenhum gasto variavel cadastrado.</td></tr>`
-          }
-        </tbody>
-      </table>
-      <p class="note">O ultimo valor salvo continua valendo para os meses seguintes ate ser alterado.</p>
     </section>
   </main>
 </body>
