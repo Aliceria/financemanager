@@ -37,6 +37,17 @@ interface PercentageExpense {
   percentage_basis_points: number;
 }
 
+interface ProjectionMonth {
+  label: string;
+  incomeCents: number;
+  fixedTotalCents: number;
+  percentageTotalCents: number;
+  variableTotalCents: number;
+  balanceCents: number;
+  accumulatedBalanceCents: number;
+  differenceCents: number | null;
+}
+
 interface DashboardSummary {
   selectedDate: Date;
   minDate: string;
@@ -48,9 +59,11 @@ interface DashboardSummary {
   percentageTotalCents: number;
   variableTotalCents: number;
   predictedBalanceCents: number;
+  accumulatedBalanceCents: number;
   fixedExpenses: Expense[];
   percentageExpenses: PercentageExpense[];
   variableExpenses: Expense[];
+  projectionMonths: ProjectionMonth[];
 }
 
 const app = express();
@@ -109,6 +122,12 @@ function toInputDate(date: Date): string {
 function addYears(date: Date, years: number): Date {
   const nextDate = new Date(date);
   nextDate.setFullYear(nextDate.getFullYear() + years);
+  return nextDate;
+}
+
+function addMonths(date: Date, months: number): Date {
+  const nextDate = new Date(date);
+  nextDate.setMonth(nextDate.getMonth() + months);
   return nextDate;
 }
 
@@ -191,6 +210,13 @@ function percentageLabel(basisPoints: number): string {
   });
 }
 
+function monthLabel(date: Date): string {
+  return date.toLocaleDateString("pt-BR", {
+    month: "long",
+    year: "numeric",
+  });
+}
+
 async function getMonthlyIncomeCents(userId: number): Promise<number> {
   const settings = await get<FinanceSettings>(
     "SELECT monthly_income_cents FROM finance_settings WHERE user_id = ?",
@@ -263,25 +289,42 @@ async function buildDashboardSummary(
     (total, expense) => total + expense.amount_cents,
     0,
   );
+  const monthlyBalanceCents =
+    incomeCents - fixedTotalCents - percentageTotalCents - variableTotalCents;
+  const monthsAhead = Math.max(0, monthsBetween(minDate, selectedDate));
+  const projectionMonths: ProjectionMonth[] = [];
+
+  for (let monthIndex = 0; monthIndex <= monthsAhead; monthIndex += 1) {
+    const accumulatedBalanceCents = monthlyBalanceCents * (monthIndex + 1);
+
+    projectionMonths.push({
+      label: monthLabel(addMonths(minDate, monthIndex)),
+      incomeCents,
+      fixedTotalCents,
+      percentageTotalCents,
+      variableTotalCents,
+      balanceCents: monthlyBalanceCents,
+      accumulatedBalanceCents,
+      differenceCents: monthIndex === 0 ? null : 0,
+    });
+  }
 
   return {
     selectedDate,
     minDate: toInputDate(minDate),
     maxDate: toInputDate(maxDate),
-    monthLabel: selectedDate.toLocaleDateString("pt-BR", {
-      month: "long",
-      year: "numeric",
-    }),
-    monthsAhead: Math.max(0, monthsBetween(minDate, selectedDate)),
+    monthLabel: monthLabel(selectedDate),
+    monthsAhead,
     incomeCents,
     fixedTotalCents,
     percentageTotalCents,
     variableTotalCents,
-    predictedBalanceCents:
-      incomeCents - fixedTotalCents - percentageTotalCents - variableTotalCents,
+    predictedBalanceCents: monthlyBalanceCents,
+    accumulatedBalanceCents: projectionMonths.at(-1)?.accumulatedBalanceCents ?? 0,
     fixedExpenses,
     percentageExpenses,
     variableExpenses,
+    projectionMonths,
   };
 }
 
@@ -401,11 +444,14 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
     .expense-list input { width: 100%; }
     .expense-list .amount-input { width: 140px; }
     .actions { width: 190px; }
-    .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+    .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
     .card { padding: 18px; background: #1f1f1f; border: 1px solid #333; border-radius: 8px; }
     .label { margin: 0 0 8px; color: #cfcfcf; font-size: 0.9rem; }
     .value { margin: 0; font-size: 1.35rem; font-weight: bold; }
     .note { color: #cfcfcf; }
+    .projection-table { width: 100%; margin-top: 16px; border-collapse: collapse; }
+    .projection-table th, .projection-table td { padding: 10px; border-top: 1px solid #333; text-align: right; }
+    .projection-table th:first-child, .projection-table td:first-child { text-align: left; }
     @media (max-width: 850px) {
       header, .toolbar { align-items: flex-start; flex-direction: column; }
       .income-form { align-items: stretch; flex-direction: column; }
@@ -487,6 +533,46 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
         <p class="label">Saldo previsto</p>
         <p class="value">${money(summary.predictedBalanceCents)}</p>
       </article>
+      <article class="card">
+        <p class="label">Saldo acumulado</p>
+        <p class="value">${money(summary.accumulatedBalanceCents)}</p>
+      </article>
+    </section>
+
+    <section class="panel">
+      <h2>Previsao mes a mes</h2>
+      <table class="projection-table">
+        <thead>
+          <tr>
+            <th>Mes</th>
+            <th>Renda</th>
+            <th>Fixos</th>
+            <th>Percentuais</th>
+            <th>Variaveis</th>
+            <th>Saldo</th>
+            <th>Acumulado</th>
+            <th>Diferenca</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${summary.projectionMonths
+            .map(
+              (month) => `
+                <tr>
+                  <td>${escapeHtml(month.label)}</td>
+                  <td>${money(month.incomeCents)}</td>
+                  <td>${money(month.fixedTotalCents)}</td>
+                  <td>${money(month.percentageTotalCents)}</td>
+                  <td>${money(month.variableTotalCents)}</td>
+                  <td>${money(month.balanceCents)}</td>
+                  <td>${money(month.accumulatedBalanceCents)}</td>
+                  <td>${month.differenceCents === null ? "-" : money(month.differenceCents)}</td>
+                </tr>
+              `,
+            )
+            .join("")}
+        </tbody>
+      </table>
     </section>
 
     <section class="panel">
