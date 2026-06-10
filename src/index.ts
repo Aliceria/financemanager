@@ -50,6 +50,7 @@ interface DashboardSummary {
   predictedBalanceCents: number;
   fixedExpenses: Expense[];
   percentageExpenses: PercentageExpense[];
+  variableExpenses: Expense[];
 }
 
 const app = express();
@@ -225,6 +226,18 @@ async function getPercentageExpenses(
   );
 }
 
+async function getVariableExpenses(userId: number): Promise<Expense[]> {
+  return all<Expense>(
+    `
+      SELECT id, name, amount_cents
+      FROM expenses
+      WHERE user_id = ? AND type = 'variable'
+      ORDER BY name
+    `,
+    [userId],
+  );
+}
+
 async function buildDashboardSummary(
   userId: number,
   dateValue: unknown,
@@ -236,6 +249,7 @@ async function buildDashboardSummary(
   const incomeCents = await getMonthlyIncomeCents(userId);
   const fixedExpenses = await getFixedExpenses(userId);
   const percentageExpenses = await getPercentageExpenses(userId);
+  const variableExpenses = await getVariableExpenses(userId);
   const fixedTotalCents = fixedExpenses.reduce(
     (total, expense) => total + expense.amount_cents,
     0,
@@ -245,7 +259,10 @@ async function buildDashboardSummary(
       total + Math.round((incomeCents * expense.percentage_basis_points) / 10000),
     0,
   );
-  const variableTotalCents = 0;
+  const variableTotalCents = variableExpenses.reduce(
+    (total, expense) => total + expense.amount_cents,
+    0,
+  );
 
   return {
     selectedDate,
@@ -264,6 +281,7 @@ async function buildDashboardSummary(
       incomeCents - fixedTotalCents - percentageTotalCents - variableTotalCents,
     fixedExpenses,
     percentageExpenses,
+    variableExpenses,
   };
 }
 
@@ -571,6 +589,54 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
         </tbody>
       </table>
     </section>
+
+    <section class="panel">
+      <h2>Gastos variaveis mensais</h2>
+      <form class="expense-form" method="POST" action="/expenses/variable">
+        <div class="field">
+          <label for="variableName">Nome</label>
+          <input id="variableName" name="name" placeholder="Ex: mercado" required>
+        </div>
+        <div class="field">
+          <label for="variableAmount">Valor mensal atual</label>
+          <input id="variableAmount" name="amount" type="number" min="0" step="0.01" required>
+        </div>
+        <button type="submit">Adicionar</button>
+      </form>
+
+      <table class="expense-list">
+        <thead>
+          <tr>
+            <th>Gasto</th>
+            <th>Valor atual</th>
+            <th class="actions">Acoes</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            summary.variableExpenses.length
+              ? summary.variableExpenses
+                  .map(
+                    (expense) => `
+                      <tr>
+                        <td colspan="3">
+                          <form method="POST" action="/expenses/${expense.id}/variable">
+                            <input name="name" value="${escapeHtml(expense.name)}" required>
+                            <input class="amount-input" name="amount" type="number" min="0" step="0.01" value="${(expense.amount_cents / 100).toFixed(2)}" required>
+                            <button type="submit">Salvar</button>
+                            <button type="submit" formaction="/expenses/${expense.id}/delete">Remover</button>
+                          </form>
+                        </td>
+                      </tr>
+                    `,
+                  )
+                  .join("")
+              : `<tr><td colspan="3">Nenhum gasto variavel cadastrado.</td></tr>`
+          }
+        </tbody>
+      </table>
+      <p class="note">O ultimo valor salvo continua valendo para os meses seguintes ate ser alterado.</p>
+    </section>
   </main>
 </body>
 </html>`;
@@ -797,6 +863,68 @@ app.post(
             WHERE id = ? AND user_id = ? AND type = 'percentage'
           `,
           [name, percentageBasisPoints, expenseId, user.id],
+        );
+      }
+
+      response.redirect("/dashboard");
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+app.post("/expenses/variable", requireLogin, async (request, response, next) => {
+  try {
+    const user = request.session.user;
+
+    if (!user) {
+      response.redirect("/login");
+      return;
+    }
+
+    const name = String(request.body.name ?? "").trim();
+    const amountCents = parseCurrencyToCents(request.body.amount);
+
+    if (name) {
+      await run(
+        `
+          INSERT INTO expenses (user_id, type, name, amount_cents)
+          VALUES (?, 'variable', ?, ?)
+        `,
+        [user.id, name, amountCents],
+      );
+    }
+
+    response.redirect("/dashboard");
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post(
+  "/expenses/:id/variable",
+  requireLogin,
+  async (request, response, next) => {
+    try {
+      const user = request.session.user;
+
+      if (!user) {
+        response.redirect("/login");
+        return;
+      }
+
+      const expenseId = Number(request.params.id);
+      const name = String(request.body.name ?? "").trim();
+      const amountCents = parseCurrencyToCents(request.body.amount);
+
+      if (Number.isInteger(expenseId) && name) {
+        await run(
+          `
+            UPDATE expenses
+            SET name = ?, amount_cents = ?
+            WHERE id = ? AND user_id = ? AND type = 'variable'
+          `,
+          [name, amountCents, expenseId, user.id],
         );
       }
 
