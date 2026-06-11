@@ -12,6 +12,7 @@ declare module "express-session" {
       id: number;
       username: string;
     };
+    activeProfileId?: number;
   }
 }
 
@@ -19,6 +20,12 @@ interface User {
   id: number;
   username: string;
   password_hash: string;
+}
+
+interface FinanceProfile {
+  id: number;
+  user_id: number;
+  name: string;
 }
 
 interface FinanceSettings {
@@ -37,6 +44,18 @@ interface PercentageExpense {
   percentage_basis_points: number;
 }
 
+interface FinancialGoal {
+  id: number;
+  name: string;
+  target_cents: number;
+}
+
+interface GoalProgress extends FinancialGoal {
+  forecastLabel: string;
+  monthsNeeded: number | null;
+  progressPercent: number;
+}
+
 interface ProjectionMonth {
   label: string;
   incomeCents: number;
@@ -49,6 +68,8 @@ interface ProjectionMonth {
 }
 
 interface DashboardSummary {
+  profiles: FinanceProfile[];
+  activeProfile: FinanceProfile;
   selectedDate: Date;
   minDate: string;
   maxDate: string;
@@ -58,11 +79,13 @@ interface DashboardSummary {
   fixedTotalCents: number;
   percentageTotalCents: number;
   variableTotalCents: number;
+  totalExpensesCents: number;
   predictedBalanceCents: number;
   accumulatedBalanceCents: number;
   fixedExpenses: Expense[];
   percentageExpenses: PercentageExpense[];
   variableExpenses: Expense[];
+  goals: GoalProgress[];
   projectionMonths: ProjectionMonth[];
 }
 
@@ -106,6 +129,7 @@ const SESSION_SECRET = process.env.SESSION_SECRET;
 const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD;
 const DATA_DIR = path.join(__dirname, "..", "data");
 const DB_PATH = path.join(DATA_DIR, "financemanager.sqlite");
+const DEFAULT_PROFILE_NAME = "PADRAO";
 
 if (!SESSION_SECRET) {
   throw new Error("Defina SESSION_SECRET antes de iniciar o servidor.");
@@ -119,6 +143,22 @@ const db = new sqlite3.Database(DB_PATH);
 function run(sql: string, params: unknown[] = []): Promise<void> {
   return new Promise((resolve, reject) => {
     db.run(sql, params, (error) => (error ? reject(error) : resolve()));
+  });
+}
+
+function runWithResult(
+  sql: string,
+  params: unknown[] = [],
+): Promise<{ lastID: number; changes: number }> {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function onRun(error) {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve({ lastID: this.lastID, changes: this.changes });
+    });
   });
 }
 
@@ -136,6 +176,15 @@ function all<T>(sql: string, params: unknown[] = []): Promise<T[]> {
       error ? reject(error) : resolve(rows as T[]),
     );
   });
+}
+
+async function hasTable(tableName: string): Promise<boolean> {
+  const table = await get<{ name: string }>(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+    [tableName],
+  );
+
+  return Boolean(table);
 }
 
 async function hasColumn(tableName: string, columnName: string): Promise<boolean> {
@@ -193,9 +242,13 @@ function addMonths(date: Date, months: number): Date {
   return nextDate;
 }
 
-function clampDate(dateValue: unknown): Date {
+function todayAtMidnight(): Date {
   const today = new Date();
-  const minDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  return new Date(today.getFullYear(), today.getMonth(), today.getDate());
+}
+
+function clampDate(dateValue: unknown): Date {
+  const minDate = todayAtMidnight();
   const maxDate = addYears(minDate, 1);
   const requestedDate = parseInputDate(dateValue) ?? minDate;
 
@@ -279,65 +332,175 @@ function monthLabel(date: Date): string {
   });
 }
 
-async function getMonthlyIncomeCents(userId: number): Promise<number> {
-  const settings = await get<FinanceSettings>(
-    "SELECT monthly_income_cents FROM finance_settings WHERE user_id = ?",
+function normalizeName(value: unknown, maxLength = 60): string {
+  return String(value ?? "").trim().slice(0, maxLength);
+}
+
+async function createDefaultProfile(userId: number): Promise<FinanceProfile> {
+  await run(
+    `
+      INSERT OR IGNORE INTO profiles (user_id, name)
+      VALUES (?, ?)
+    `,
+    [userId, DEFAULT_PROFILE_NAME],
+  );
+
+  const profile = await get<FinanceProfile>(
+    "SELECT id, user_id, name FROM profiles WHERE user_id = ? AND name = ?",
+    [userId, DEFAULT_PROFILE_NAME],
+  );
+
+  if (!profile) {
+    throw new Error("Nao foi possivel criar o perfil padrao.");
+  }
+
+  return profile;
+}
+
+async function getProfiles(userId: number): Promise<FinanceProfile[]> {
+  const profiles = await all<FinanceProfile>(
+    `
+      SELECT id, user_id, name
+      FROM profiles
+      WHERE user_id = ?
+      ORDER BY id
+    `,
     [userId],
+  );
+
+  if (profiles.length > 0) {
+    return profiles;
+  }
+
+  return [await createDefaultProfile(userId)];
+}
+
+async function getProfileContext(
+  userId: number,
+  activeProfileId?: number,
+): Promise<{ profiles: FinanceProfile[]; activeProfile: FinanceProfile }> {
+  const profiles = await getProfiles(userId);
+  const activeProfile =
+    profiles.find((profile) => profile.id === activeProfileId) ?? profiles[0];
+
+  return { profiles, activeProfile };
+}
+
+async function getMonthlyIncomeCents(profileId: number): Promise<number> {
+  const settings = await get<FinanceSettings>(
+    "SELECT monthly_income_cents FROM profile_settings WHERE profile_id = ?",
+    [profileId],
   );
 
   return settings?.monthly_income_cents ?? 0;
 }
 
-async function getFixedExpenses(userId: number): Promise<Expense[]> {
+async function getFixedExpenses(
+  userId: number,
+  profileId: number,
+): Promise<Expense[]> {
   return all<Expense>(
     `
       SELECT id, name, amount_cents
       FROM expenses
-      WHERE user_id = ? AND type = 'fixed'
+      WHERE user_id = ? AND profile_id = ? AND type = 'fixed'
       ORDER BY name
     `,
-    [userId],
+    [userId, profileId],
   );
 }
 
 async function getPercentageExpenses(
   userId: number,
+  profileId: number,
 ): Promise<PercentageExpense[]> {
   return all<PercentageExpense>(
     `
       SELECT id, name, percentage_basis_points
       FROM expenses
-      WHERE user_id = ? AND type = 'percentage'
+      WHERE user_id = ? AND profile_id = ? AND type = 'percentage'
       ORDER BY name
     `,
-    [userId],
+    [userId, profileId],
   );
 }
 
-async function getVariableExpenses(userId: number): Promise<Expense[]> {
+async function getVariableExpenses(
+  userId: number,
+  profileId: number,
+): Promise<Expense[]> {
   return all<Expense>(
     `
       SELECT id, name, amount_cents
       FROM expenses
-      WHERE user_id = ? AND type = 'variable'
+      WHERE user_id = ? AND profile_id = ? AND type = 'variable'
       ORDER BY name
     `,
-    [userId],
+    [userId, profileId],
   );
+}
+
+async function getFinancialGoals(
+  userId: number,
+  profileId: number,
+): Promise<FinancialGoal[]> {
+  return all<FinancialGoal>(
+    `
+      SELECT id, name, target_cents
+      FROM financial_goals
+      WHERE user_id = ? AND profile_id = ?
+      ORDER BY id DESC
+    `,
+    [userId, profileId],
+  );
+}
+
+function buildGoalProgress(
+  goals: FinancialGoal[],
+  monthlyBalanceCents: number,
+  accumulatedBalanceCents: number,
+): GoalProgress[] {
+  const minDate = todayAtMidnight();
+
+  return goals.map((goal) => {
+    if (monthlyBalanceCents <= 0 || goal.target_cents <= 0) {
+      return {
+        ...goal,
+        forecastLabel: "sem previsao",
+        monthsNeeded: null,
+        progressPercent: 0,
+      };
+    }
+
+    const monthsNeeded = Math.max(1, Math.ceil(goal.target_cents / monthlyBalanceCents));
+    const forecastDate = addMonths(minDate, monthsNeeded - 1);
+    const progressPercent = Math.min(
+      100,
+      Math.max(0, Math.round((accumulatedBalanceCents / goal.target_cents) * 100)),
+    );
+
+    return {
+      ...goal,
+      forecastLabel: monthLabel(forecastDate),
+      monthsNeeded,
+      progressPercent,
+    };
+  });
 }
 
 async function buildDashboardSummary(
   userId: number,
+  profiles: FinanceProfile[],
+  activeProfile: FinanceProfile,
   dateValue: unknown,
 ): Promise<DashboardSummary> {
-  const today = new Date();
-  const minDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const minDate = todayAtMidnight();
   const maxDate = addYears(minDate, 1);
   const selectedDate = clampDate(dateValue);
-  const incomeCents = await getMonthlyIncomeCents(userId);
-  const fixedExpenses = await getFixedExpenses(userId);
-  const percentageExpenses = await getPercentageExpenses(userId);
-  const variableExpenses = await getVariableExpenses(userId);
+  const incomeCents = await getMonthlyIncomeCents(activeProfile.id);
+  const fixedExpenses = await getFixedExpenses(userId, activeProfile.id);
+  const percentageExpenses = await getPercentageExpenses(userId, activeProfile.id);
+  const variableExpenses = await getVariableExpenses(userId, activeProfile.id);
   const fixedTotalCents = fixedExpenses.reduce(
     (total, expense) => total + expense.amount_cents,
     0,
@@ -351,8 +514,9 @@ async function buildDashboardSummary(
     (total, expense) => total + expense.amount_cents,
     0,
   );
-  const monthlyBalanceCents =
-    incomeCents - fixedTotalCents - percentageTotalCents - variableTotalCents;
+  const totalExpensesCents =
+    fixedTotalCents + percentageTotalCents + variableTotalCents;
+  const monthlyBalanceCents = incomeCents - totalExpensesCents;
   const monthsAhead = Math.max(0, monthsBetween(minDate, selectedDate));
   const projectionMonths: ProjectionMonth[] = [];
 
@@ -371,7 +535,13 @@ async function buildDashboardSummary(
     });
   }
 
+  const accumulatedBalanceCents =
+    projectionMonths.at(-1)?.accumulatedBalanceCents ?? 0;
+  const rawGoals = await getFinancialGoals(userId, activeProfile.id);
+
   return {
+    profiles,
+    activeProfile,
     selectedDate,
     minDate: toInputDate(minDate),
     maxDate: toInputDate(maxDate),
@@ -381,11 +551,13 @@ async function buildDashboardSummary(
     fixedTotalCents,
     percentageTotalCents,
     variableTotalCents,
+    totalExpensesCents,
     predictedBalanceCents: monthlyBalanceCents,
-    accumulatedBalanceCents: projectionMonths.at(-1)?.accumulatedBalanceCents ?? 0,
+    accumulatedBalanceCents,
     fixedExpenses,
     percentageExpenses,
     variableExpenses,
+    goals: buildGoalProgress(rawGoals, monthlyBalanceCents, accumulatedBalanceCents),
     projectionMonths,
   };
 }
@@ -398,33 +570,6 @@ async function setupDatabase(): Promise<void> {
       password_hash TEXT NOT NULL
     )
   `);
-
-  await run(`
-    CREATE TABLE IF NOT EXISTS finance_settings (
-      user_id INTEGER PRIMARY KEY,
-      monthly_income_cents INTEGER NOT NULL DEFAULT 0,
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    )
-  `);
-
-  await run(`
-    CREATE TABLE IF NOT EXISTS expenses (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      type TEXT NOT NULL,
-      name TEXT NOT NULL,
-      amount_cents INTEGER NOT NULL DEFAULT 0,
-      percentage_basis_points INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    )
-  `);
-
-  if (!(await hasColumn("expenses", "percentage_basis_points"))) {
-    await run(
-      "ALTER TABLE expenses ADD COLUMN percentage_basis_points INTEGER NOT NULL DEFAULT 0",
-    );
-  }
 
   const admin = await get<User>("SELECT * FROM users WHERE username = ?", [
     "admin",
@@ -441,6 +586,96 @@ async function setupDatabase(): Promise<void> {
       "Nenhum usuario admin criado. Defina DEFAULT_ADMIN_PASSWORD no ambiente.",
     );
   }
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, name),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+  `);
+
+  await run(
+    `
+      INSERT OR IGNORE INTO profiles (user_id, name)
+      SELECT id, ? FROM users
+    `,
+    [DEFAULT_PROFILE_NAME],
+  );
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS profile_settings (
+      profile_id INTEGER PRIMARY KEY,
+      monthly_income_cents INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (profile_id) REFERENCES profiles(id)
+    )
+  `);
+
+  if (await hasTable("finance_settings")) {
+    await run(`
+      INSERT OR IGNORE INTO profile_settings (profile_id, monthly_income_cents)
+      SELECT profiles.id, finance_settings.monthly_income_cents
+      FROM finance_settings
+      INNER JOIN profiles
+        ON profiles.user_id = finance_settings.user_id
+       AND profiles.name = '${DEFAULT_PROFILE_NAME}'
+    `);
+  }
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS expenses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      profile_id INTEGER,
+      type TEXT NOT NULL,
+      name TEXT NOT NULL,
+      amount_cents INTEGER NOT NULL DEFAULT 0,
+      percentage_basis_points INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (profile_id) REFERENCES profiles(id)
+    )
+  `);
+
+  if (!(await hasColumn("expenses", "percentage_basis_points"))) {
+    await run(
+      "ALTER TABLE expenses ADD COLUMN percentage_basis_points INTEGER NOT NULL DEFAULT 0",
+    );
+  }
+
+  if (!(await hasColumn("expenses", "profile_id"))) {
+    await run("ALTER TABLE expenses ADD COLUMN profile_id INTEGER");
+  }
+
+  await run(
+    `
+      UPDATE expenses
+      SET profile_id = (
+        SELECT profiles.id
+        FROM profiles
+        WHERE profiles.user_id = expenses.user_id
+          AND profiles.name = ?
+      )
+      WHERE profile_id IS NULL
+    `,
+    [DEFAULT_PROFILE_NAME],
+  );
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS financial_goals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      profile_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      target_cents INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (profile_id) REFERENCES profiles(id)
+    )
+  `);
 }
 
 function requireLogin(request: Request, response: Response, next: NextFunction): void {
@@ -452,37 +687,102 @@ function requireLogin(request: Request, response: Response, next: NextFunction):
   next();
 }
 
-function loginPage(error = "", username = ""): string {
+async function activeProfileIdForRequest(request: Request): Promise<number> {
+  const user = request.session.user;
+
+  if (!user) {
+    throw new Error("Usuario nao autenticado.");
+  }
+
+  const { activeProfile } = await getProfileContext(
+    user.id,
+    request.session.activeProfileId,
+  );
+  request.session.activeProfileId = activeProfile.id;
+  return activeProfile.id;
+}
+
+function authPage(
+  title: string,
+  error: string,
+  body: string,
+  footer: string,
+): string {
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Login</title>
+  <title>${escapeHtml(title)}</title>
   <style>
+    * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; font-family: Arial, sans-serif; background: #121212; color: white; }
-    main { width: min(400px, calc(100vw - 32px)); padding: 32px; background: #1e1e1e; border-radius: 8px; }
-    label { display: block; margin: 16px 0 8px; }
-    input, button { width: 100%; padding: 12px; border-radius: 6px; border: 0; box-sizing: border-box; }
+    main { width: min(420px, calc(100vw - 32px)); padding: 32px; background: #1e1e1e; border: 1px solid #303236; border-radius: 8px; }
+    h1 { margin: 0 0 18px; }
+    label { display: block; margin: 16px 0 8px; color: #d7d7d7; }
+    input, button { width: 100%; padding: 12px; border-radius: 6px; border: 0; }
     input { background: #2c2c2c; color: white; }
     button { margin-top: 18px; background: #707070; color: white; cursor: pointer; }
+    a { color: #f0f0f0; }
     .error { padding: 12px; background: #5f2424; border-radius: 6px; }
+    .footer { margin: 18px 0 0; color: #cfcfcf; }
   </style>
 </head>
 <body>
   <main>
-    <h1>Login</h1>
+    <h1>${escapeHtml(title)}</h1>
     ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
-    <form method="POST" action="/login">
+    ${body}
+    <p class="footer">${footer}</p>
+  </main>
+</body>
+</html>`;
+}
+
+function loginPage(error = "", username = ""): string {
+  return authPage(
+    "Login",
+    error,
+    `<form method="POST" action="/login">
       <label for="username">Usuario</label>
       <input id="username" name="username" value="${escapeHtml(username)}" required>
       <label for="password">Senha</label>
       <input id="password" name="password" type="password" required>
       <button type="submit">Entrar</button>
-    </form>
-  </main>
-</body>
-</html>`;
+    </form>`,
+    `Nao tem conta? <a href="/register">Criar conta</a>`,
+  );
+}
+
+function registerPage(error = "", username = ""): string {
+  return authPage(
+    "Criar conta",
+    error,
+    `<form method="POST" action="/register">
+      <label for="username">Usuario</label>
+      <input id="username" name="username" minlength="3" maxlength="40" value="${escapeHtml(username)}" required>
+      <label for="password">Senha</label>
+      <input id="password" name="password" type="password" minlength="6" required>
+      <button type="submit">Registrar</button>
+    </form>`,
+    `Ja tem conta? <a href="/login">Entrar</a>`,
+  );
+}
+
+function chartBar(label: string, cents: number, maxCents: number, tone: string): string {
+  const width = maxCents > 0 ? Math.max(3, Math.round((Math.abs(cents) / maxCents) * 100)) : 0;
+
+  return `
+    <div class="chart-row">
+      <div class="chart-label">
+        <span>${escapeHtml(label)}</span>
+        <strong>${money(cents)}</strong>
+      </div>
+      <div class="chart-track">
+        <div class="chart-fill ${tone}" style="width: ${width}%"></div>
+      </div>
+    </div>
+  `;
 }
 
 function dashboardPage(username: string, summary: DashboardSummary): string {
@@ -536,6 +836,13 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
         .join("")
     : `<p class="empty">Nenhum gasto variavel cadastrado.</p>`;
 
+  const profileOptions = summary.profiles
+    .map(
+      (profile) =>
+        `<option value="${profile.id}"${profile.id === summary.activeProfile.id ? " selected" : ""}>${escapeHtml(profile.name)}</option>`,
+    )
+    .join("");
+
   const projectionRows = summary.projectionMonths
     .map(
       (month) => `
@@ -553,6 +860,48 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
     )
     .join("");
 
+  const goalRows = summary.goals.length
+    ? summary.goals
+        .map(
+          (goal) => `
+            <form class="goal-row" method="POST" action="/goals/${goal.id}">
+              <input name="name" value="${escapeHtml(goal.name)}" required>
+              <input name="target" type="number" min="0" step="0.01" value="${(goal.target_cents / 100).toFixed(2)}" required>
+              <div class="goal-progress">
+                <span>${goal.forecastLabel}${goal.monthsNeeded ? ` (${goal.monthsNeeded} mes(es))` : ""}</span>
+                <div class="progress-track">
+                  <div class="progress-fill" style="width: ${goal.progressPercent}%"></div>
+                </div>
+              </div>
+              <button type="submit">Salvar</button>
+              <button type="submit" formaction="/goals/${goal.id}/delete">Remover</button>
+            </form>
+          `,
+        )
+        .join("")
+    : `<p class="empty">Nenhuma meta cadastrada.</p>`;
+
+  const chartMax = Math.max(
+    summary.incomeCents,
+    summary.fixedTotalCents,
+    summary.percentageTotalCents,
+    summary.variableTotalCents,
+    Math.abs(summary.predictedBalanceCents),
+    1,
+  );
+  const chartRows = [
+    chartBar("Entrada", summary.incomeCents, chartMax, "income-fill"),
+    chartBar("Fixos", summary.fixedTotalCents, chartMax, "fixed-fill"),
+    chartBar("Percentuais", summary.percentageTotalCents, chartMax, "percentage-fill"),
+    chartBar("Variaveis", summary.variableTotalCents, chartMax, "variable-fill"),
+    chartBar(
+      "Saldo mensal",
+      summary.predictedBalanceCents,
+      chartMax,
+      summary.predictedBalanceCents >= 0 ? "balance-fill" : "negative-fill",
+    ),
+  ].join("");
+
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -562,14 +911,18 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; font-family: Arial, sans-serif; background: #0f0f10; color: white; }
-    button, input, summary { font: inherit; }
+    button, input, select, summary { font: inherit; }
     button { padding: 8px 10px; border: 0; border-radius: 6px; background: #747474; color: white; cursor: pointer; white-space: nowrap; }
     button:hover, button:focus { background: #8a8a8a; }
-    input { min-width: 0; padding: 9px 10px; border: 1px solid #373737; border-radius: 6px; background: #202124; color: white; }
-    .topbar { min-height: 72px; display: grid; grid-template-columns: 1fr auto auto; gap: 18px; align-items: center; padding: 14px 22px; background: #000; border-bottom: 1px solid #252525; }
+    input, select { min-width: 0; padding: 9px 10px; border: 1px solid #373737; border-radius: 6px; background: #202124; color: white; }
+    .topbar { min-height: 72px; display: grid; grid-template-columns: 1fr minmax(360px, auto) auto; gap: 18px; align-items: center; padding: 14px 22px; background: #000; border-bottom: 1px solid #252525; }
     .brand { font-size: 1.45rem; font-weight: 700; }
-    .profile { padding: 9px 14px; border: 1px solid #555; border-radius: 6px; background: #111; }
-    .user-box { display: flex; gap: 12px; align-items: center; color: #e8e8e8; }
+    .profile-area { display: grid; gap: 8px; }
+    .profile-select { display: grid; grid-template-columns: auto minmax(150px, 1fr) auto; gap: 8px; align-items: center; }
+    .profile-create { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+    .profile-create input { padding: 7px 9px; }
+    .profile-create button { padding: 7px 9px; }
+    .user-box { display: flex; gap: 12px; align-items: center; justify-content: end; color: #e8e8e8; }
     .user-box form { margin: 0; }
     main { width: min(1440px, calc(100vw - 28px)); margin: 0 auto; padding: 18px 0 28px; }
     .dashboard-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; align-items: start; }
@@ -578,13 +931,11 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
     .card-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; margin-bottom: 12px; }
     .metric { margin: 6px 0 14px; font-size: 1.65rem; font-weight: 700; }
     .small { color: #bdbdbd; font-size: 0.9rem; }
-    .income-card { grid-column: span 3; }
-    .fixed-card { grid-column: span 3; }
-    .percentage-card { grid-column: span 3; }
-    .variable-card { grid-column: span 3; }
-    .balance-card { grid-column: span 4; }
+    .income-card, .fixed-card, .percentage-card, .variable-card { grid-column: span 3; }
+    .balance-card, .chart-card { grid-column: span 4; }
     .forecast-card { grid-column: span 8; }
-    .item-list { display: grid; gap: 8px; max-height: 210px; overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
+    .goals-card { grid-column: span 8; }
+    .item-list, .goal-list { display: grid; gap: 8px; max-height: 210px; overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
     .item-row { display: grid; grid-template-columns: minmax(0, 1fr) 96px; gap: 8px; align-items: center; padding: 8px; background: #111214; border: 1px solid #292b2f; border-radius: 7px; }
     .item-row input { width: 100%; }
     .item-row button { width: 100%; padding: 7px 8px; font-size: 0.84rem; }
@@ -609,30 +960,55 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
     .projection-table th, .projection-table td { padding: 9px; border-top: 1px solid #2c2e32; text-align: right; white-space: nowrap; }
     .projection-table th:first-child, .projection-table td:first-child { text-align: left; }
     .projection-table thead th { position: sticky; top: 0; background: #202124; z-index: 1; }
+    .goal-row { display: grid; grid-template-columns: minmax(130px, 1fr) 130px minmax(180px, 1.1fr) auto auto; gap: 8px; align-items: center; padding: 8px; background: #111214; border: 1px solid #292b2f; border-radius: 7px; }
+    .goal-row button { padding: 7px 8px; font-size: 0.84rem; }
+    .goal-progress span { display: block; margin-bottom: 6px; color: #d7d7d7; font-size: 0.86rem; }
+    .progress-track, .chart-track { height: 9px; overflow: hidden; background: #27292d; border-radius: 999px; }
+    .progress-fill { height: 100%; background: #78a86f; }
+    .chart-list { display: grid; gap: 13px; }
+    .chart-label { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 6px; color: #d7d7d7; font-size: 0.9rem; }
+    .chart-fill { height: 100%; border-radius: 999px; }
+    .income-fill { background: #78a86f; }
+    .fixed-fill { background: #b76f64; }
+    .percentage-fill { background: #b89d55; }
+    .variable-fill { background: #6f93b8; }
+    .balance-fill { background: #70a6a0; }
+    .negative-fill { background: #c44f4f; }
     @media (max-width: 1180px) {
-      .income-card, .fixed-card, .percentage-card, .variable-card { grid-column: span 6; }
-      .balance-card, .forecast-card { grid-column: span 12; }
+      .income-card, .fixed-card, .percentage-card, .variable-card, .balance-card, .chart-card { grid-column: span 6; }
+      .forecast-card, .goals-card { grid-column: span 12; }
+      .topbar { grid-template-columns: 1fr; align-items: start; }
+      .user-box { justify-content: start; }
     }
     @media (max-width: 760px) {
-      .topbar { grid-template-columns: 1fr; align-items: start; }
-      .user-box { flex-wrap: wrap; }
       .dashboard-grid { grid-template-columns: 1fr; }
-      .income-card, .fixed-card, .percentage-card, .variable-card, .balance-card, .forecast-card { grid-column: span 1; }
-      .compact-form, .income-form, .date-form, .item-row, .percentage-row { grid-template-columns: 1fr; }
+      .income-card, .fixed-card, .percentage-card, .variable-card, .balance-card, .forecast-card, .goals-card, .chart-card { grid-column: span 1; }
+      .compact-form, .income-form, .date-form, .item-row, .percentage-row, .goal-row, .profile-select, .profile-create { grid-template-columns: 1fr; }
       .item-row button:first-of-type, .item-row button:last-of-type, .percentage-row span { grid-column: auto; }
       .balance-grid { grid-template-columns: 1fr; }
+      .user-box { flex-wrap: wrap; }
     }
   </style>
 </head>
 <body>
   <header class="topbar">
     <div class="brand">Finance Manager</div>
-    <div class="profile">perfil: CASA</div>
+    <div class="profile-area">
+      <form class="profile-select" method="POST" action="/profiles/select">
+        <label for="profileId">perfil</label>
+        <select id="profileId" name="profileId" onchange="this.form.submit()">${profileOptions}</select>
+        <button type="submit">Usar</button>
+      </form>
+      <form class="profile-create" method="POST" action="/profiles">
+        <input name="name" maxlength="40" placeholder="novo perfil">
+        <button type="submit">Criar perfil</button>
+      </form>
+    </div>
     <div class="user-box">
       <span>usuario: ${escapeHtml(username)}</span>
       <form method="POST" action="/logout">
-      <button type="submit">Sair</button>
-    </form>
+        <button type="submit">Sair</button>
+      </form>
     </div>
   </header>
   <main>
@@ -721,7 +1097,7 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
       <article class="card balance-card">
         <div class="card-head">
           <h2>Balanca / resumo</h2>
-          <span class="small">${escapeHtml(summary.monthLabel)}</span>
+          <span class="small">${escapeHtml(summary.activeProfile.name)}</span>
         </div>
         <div class="balance-grid">
           <div class="balance-box">
@@ -734,13 +1110,21 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
           </div>
           <div class="balance-box">
             <p>Total de gastos</p>
-            <strong>${money(summary.fixedTotalCents + summary.percentageTotalCents + summary.variableTotalCents)}</strong>
+            <strong>${money(summary.totalExpensesCents)}</strong>
           </div>
           <div class="balance-box">
             <p>Periodo</p>
             <strong>${summary.monthsAhead} mes(es)</strong>
           </div>
         </div>
+      </article>
+
+      <article class="card chart-card">
+        <div class="card-head">
+          <h2>Grafico simples</h2>
+          <span class="small">mes atual</span>
+        </div>
+        <div class="chart-list">${chartRows}</div>
       </article>
 
       <article class="card forecast-card">
@@ -772,6 +1156,28 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
             <tbody>${projectionRows}</tbody>
           </table>
         </div>
+      </article>
+
+      <article class="card goals-card">
+        <div class="card-head">
+          <h2>Metas financeiras</h2>
+          <span class="small">previsao pelo saldo mensal</span>
+        </div>
+        <div class="goal-list">${goalRows}</div>
+        <details>
+          <summary>Adicionar</summary>
+          <form class="compact-form" method="POST" action="/goals">
+            <div class="field">
+              <label for="goalName">Meta</label>
+              <input id="goalName" name="name" placeholder="Ex: reserva de emergencia" required>
+            </div>
+            <div class="field">
+              <label for="goalTarget">Valor alvo</label>
+              <input id="goalTarget" name="target" type="number" min="0" step="0.01" required>
+            </div>
+            <button type="submit">Adicionar</button>
+          </form>
+        </details>
       </article>
     </section>
   </main>
@@ -812,7 +1218,7 @@ app.get("/login", (request, response) => {
 
 app.post("/login", async (request, response, next) => {
   try {
-    const username = String(request.body.username ?? "").trim();
+    const username = normalizeName(request.body.username, 40);
     const password = String(request.body.password ?? "");
     const user = await get<User>("SELECT * FROM users WHERE username = ?", [
       username,
@@ -823,6 +1229,8 @@ app.post("/login", async (request, response, next) => {
       return;
     }
 
+    const { activeProfile } = await getProfileContext(user.id);
+
     request.session.regenerate((error) => {
       if (error) {
         next(error);
@@ -830,9 +1238,63 @@ app.post("/login", async (request, response, next) => {
       }
 
       request.session.user = { id: user.id, username: user.username };
+      request.session.activeProfileId = activeProfile.id;
       response.redirect("/dashboard");
     });
   } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/register", (request, response) => {
+  if (request.session.user) {
+    response.redirect("/dashboard");
+    return;
+  }
+
+  response.send(registerPage());
+});
+
+app.post("/register", async (request, response, next) => {
+  try {
+    const username = normalizeName(request.body.username, 40);
+    const password = String(request.body.password ?? "");
+
+    if (username.length < 3) {
+      response.status(400).send(registerPage("Use pelo menos 3 caracteres.", username));
+      return;
+    }
+
+    if (password.length < 6) {
+      response.status(400).send(registerPage("Use uma senha com pelo menos 6 caracteres.", username));
+      return;
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const result = await runWithResult(
+      "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+      [username, passwordHash],
+    );
+    const activeProfile = await createDefaultProfile(result.lastID);
+
+    request.session.regenerate((error) => {
+      if (error) {
+        next(error);
+        return;
+      }
+
+      request.session.user = { id: result.lastID, username };
+      request.session.activeProfileId = activeProfile.id;
+      response.redirect("/dashboard");
+    });
+  } catch (error) {
+    const sqliteError = error as { code?: string };
+
+    if (sqliteError.code === "SQLITE_CONSTRAINT") {
+      response.status(409).send(registerPage("Esse usuario ja existe.", request.body.username));
+      return;
+    }
+
     next(error);
   }
 });
@@ -846,14 +1308,24 @@ app.get("/dashboard", requireLogin, async (request, response, next) => {
       return;
     }
 
-    const summary = await buildDashboardSummary(user.id, request.query.date);
+    const { profiles, activeProfile } = await getProfileContext(
+      user.id,
+      request.session.activeProfileId,
+    );
+    request.session.activeProfileId = activeProfile.id;
+    const summary = await buildDashboardSummary(
+      user.id,
+      profiles,
+      activeProfile,
+      request.query.date,
+    );
     response.send(dashboardPage(user.username, summary));
   } catch (error) {
     next(error);
   }
 });
 
-app.post("/income", requireLogin, async (request, response, next) => {
+app.post("/profiles/select", requireLogin, async (request, response, next) => {
   try {
     const user = request.session.user;
 
@@ -862,16 +1334,71 @@ app.post("/income", requireLogin, async (request, response, next) => {
       return;
     }
 
+    const profileId = Number(request.body.profileId);
+    const profile = await get<FinanceProfile>(
+      "SELECT id, user_id, name FROM profiles WHERE id = ? AND user_id = ?",
+      [profileId, user.id],
+    );
+
+    if (profile) {
+      request.session.activeProfileId = profile.id;
+    }
+
+    response.redirect("/dashboard");
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/profiles", requireLogin, async (request, response, next) => {
+  try {
+    const user = request.session.user;
+
+    if (!user) {
+      response.redirect("/login");
+      return;
+    }
+
+    const name = normalizeName(request.body.name, 40);
+
+    if (name) {
+      await run(
+        `
+          INSERT OR IGNORE INTO profiles (user_id, name)
+          VALUES (?, ?)
+        `,
+        [user.id, name],
+      );
+
+      const profile = await get<FinanceProfile>(
+        "SELECT id, user_id, name FROM profiles WHERE user_id = ? AND name = ?",
+        [user.id, name],
+      );
+
+      if (profile) {
+        request.session.activeProfileId = profile.id;
+      }
+    }
+
+    response.redirect("/dashboard");
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/income", requireLogin, async (request, response, next) => {
+  try {
+    const profileId = await activeProfileIdForRequest(request);
     const monthlyIncomeCents = parseCurrencyToCents(request.body.monthlyIncome);
 
     await run(
       `
-        INSERT INTO finance_settings (user_id, monthly_income_cents)
+        INSERT INTO profile_settings (profile_id, monthly_income_cents)
         VALUES (?, ?)
-        ON CONFLICT(user_id)
+        ON CONFLICT(profile_id)
         DO UPDATE SET monthly_income_cents = excluded.monthly_income_cents
       `,
-      [user.id, monthlyIncomeCents],
+      [profileId, monthlyIncomeCents],
     );
 
     response.redirect("/dashboard");
@@ -889,16 +1416,17 @@ app.post("/expenses/fixed", requireLogin, async (request, response, next) => {
       return;
     }
 
-    const name = String(request.body.name ?? "").trim();
+    const profileId = await activeProfileIdForRequest(request);
+    const name = normalizeName(request.body.name);
     const amountCents = parseCurrencyToCents(request.body.amount);
 
     if (name) {
       await run(
         `
-          INSERT INTO expenses (user_id, type, name, amount_cents)
-          VALUES (?, 'fixed', ?, ?)
+          INSERT INTO expenses (user_id, profile_id, type, name, amount_cents)
+          VALUES (?, ?, 'fixed', ?, ?)
         `,
-        [user.id, name, amountCents],
+        [user.id, profileId, name, amountCents],
       );
     }
 
@@ -917,8 +1445,9 @@ app.post("/expenses/:id/fixed", requireLogin, async (request, response, next) =>
       return;
     }
 
+    const profileId = await activeProfileIdForRequest(request);
     const expenseId = Number(request.params.id);
-    const name = String(request.body.name ?? "").trim();
+    const name = normalizeName(request.body.name);
     const amountCents = parseCurrencyToCents(request.body.amount);
 
     if (Number.isInteger(expenseId) && name) {
@@ -926,9 +1455,9 @@ app.post("/expenses/:id/fixed", requireLogin, async (request, response, next) =>
         `
           UPDATE expenses
           SET name = ?, amount_cents = ?
-          WHERE id = ? AND user_id = ? AND type = 'fixed'
+          WHERE id = ? AND user_id = ? AND profile_id = ? AND type = 'fixed'
         `,
-        [name, amountCents, expenseId, user.id],
+        [name, amountCents, expenseId, user.id, profileId],
       );
     }
 
@@ -947,7 +1476,8 @@ app.post("/expenses/percentage", requireLogin, async (request, response, next) =
       return;
     }
 
-    const name = String(request.body.name ?? "").trim();
+    const profileId = await activeProfileIdForRequest(request);
+    const name = normalizeName(request.body.name);
     const percentageBasisPoints = parsePercentageToBasisPoints(
       request.body.percentage,
     );
@@ -957,14 +1487,15 @@ app.post("/expenses/percentage", requireLogin, async (request, response, next) =
         `
           INSERT INTO expenses (
             user_id,
+            profile_id,
             type,
             name,
             amount_cents,
             percentage_basis_points
           )
-          VALUES (?, 'percentage', ?, 0, ?)
+          VALUES (?, ?, 'percentage', ?, 0, ?)
         `,
-        [user.id, name, percentageBasisPoints],
+        [user.id, profileId, name, percentageBasisPoints],
       );
     }
 
@@ -986,8 +1517,9 @@ app.post(
         return;
       }
 
+      const profileId = await activeProfileIdForRequest(request);
       const expenseId = Number(request.params.id);
-      const name = String(request.body.name ?? "").trim();
+      const name = normalizeName(request.body.name);
       const percentageBasisPoints = parsePercentageToBasisPoints(
         request.body.percentage,
       );
@@ -997,9 +1529,9 @@ app.post(
           `
             UPDATE expenses
             SET name = ?, percentage_basis_points = ?
-            WHERE id = ? AND user_id = ? AND type = 'percentage'
+            WHERE id = ? AND user_id = ? AND profile_id = ? AND type = 'percentage'
           `,
-          [name, percentageBasisPoints, expenseId, user.id],
+          [name, percentageBasisPoints, expenseId, user.id, profileId],
         );
       }
 
@@ -1019,16 +1551,17 @@ app.post("/expenses/variable", requireLogin, async (request, response, next) => 
       return;
     }
 
-    const name = String(request.body.name ?? "").trim();
+    const profileId = await activeProfileIdForRequest(request);
+    const name = normalizeName(request.body.name);
     const amountCents = parseCurrencyToCents(request.body.amount);
 
     if (name) {
       await run(
         `
-          INSERT INTO expenses (user_id, type, name, amount_cents)
-          VALUES (?, 'variable', ?, ?)
+          INSERT INTO expenses (user_id, profile_id, type, name, amount_cents)
+          VALUES (?, ?, 'variable', ?, ?)
         `,
-        [user.id, name, amountCents],
+        [user.id, profileId, name, amountCents],
       );
     }
 
@@ -1050,8 +1583,9 @@ app.post(
         return;
       }
 
+      const profileId = await activeProfileIdForRequest(request);
       const expenseId = Number(request.params.id);
-      const name = String(request.body.name ?? "").trim();
+      const name = normalizeName(request.body.name);
       const amountCents = parseCurrencyToCents(request.body.amount);
 
       if (Number.isInteger(expenseId) && name) {
@@ -1059,9 +1593,9 @@ app.post(
           `
             UPDATE expenses
             SET name = ?, amount_cents = ?
-            WHERE id = ? AND user_id = ? AND type = 'variable'
+            WHERE id = ? AND user_id = ? AND profile_id = ? AND type = 'variable'
           `,
-          [name, amountCents, expenseId, user.id],
+          [name, amountCents, expenseId, user.id, profileId],
         );
       }
 
@@ -1081,13 +1615,99 @@ app.post("/expenses/:id/delete", requireLogin, async (request, response, next) =
       return;
     }
 
+    const profileId = await activeProfileIdForRequest(request);
     const expenseId = Number(request.params.id);
 
     if (Number.isInteger(expenseId)) {
-      await run("DELETE FROM expenses WHERE id = ? AND user_id = ?", [
-        expenseId,
-        user.id,
-      ]);
+      await run(
+        "DELETE FROM expenses WHERE id = ? AND user_id = ? AND profile_id = ?",
+        [expenseId, user.id, profileId],
+      );
+    }
+
+    response.redirect("/dashboard");
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/goals", requireLogin, async (request, response, next) => {
+  try {
+    const user = request.session.user;
+
+    if (!user) {
+      response.redirect("/login");
+      return;
+    }
+
+    const profileId = await activeProfileIdForRequest(request);
+    const name = normalizeName(request.body.name);
+    const targetCents = parseCurrencyToCents(request.body.target);
+
+    if (name && targetCents > 0) {
+      await run(
+        `
+          INSERT INTO financial_goals (user_id, profile_id, name, target_cents)
+          VALUES (?, ?, ?, ?)
+        `,
+        [user.id, profileId, name, targetCents],
+      );
+    }
+
+    response.redirect("/dashboard");
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/goals/:id", requireLogin, async (request, response, next) => {
+  try {
+    const user = request.session.user;
+
+    if (!user) {
+      response.redirect("/login");
+      return;
+    }
+
+    const profileId = await activeProfileIdForRequest(request);
+    const goalId = Number(request.params.id);
+    const name = normalizeName(request.body.name);
+    const targetCents = parseCurrencyToCents(request.body.target);
+
+    if (Number.isInteger(goalId) && name && targetCents > 0) {
+      await run(
+        `
+          UPDATE financial_goals
+          SET name = ?, target_cents = ?
+          WHERE id = ? AND user_id = ? AND profile_id = ?
+        `,
+        [name, targetCents, goalId, user.id, profileId],
+      );
+    }
+
+    response.redirect("/dashboard");
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/goals/:id/delete", requireLogin, async (request, response, next) => {
+  try {
+    const user = request.session.user;
+
+    if (!user) {
+      response.redirect("/login");
+      return;
+    }
+
+    const profileId = await activeProfileIdForRequest(request);
+    const goalId = Number(request.params.id);
+
+    if (Number.isInteger(goalId)) {
+      await run(
+        "DELETE FROM financial_goals WHERE id = ? AND user_id = ? AND profile_id = ?",
+        [goalId, user.id, profileId],
+      );
     }
 
     response.redirect("/dashboard");
