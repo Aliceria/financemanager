@@ -15,3 +15,16 @@ O sistema funciona localmente e nao usa APIs externas para processar dados
 financeiros. Dados de login usam hash com bcrypt. Arquivos sensiveis como
 `.env`, bancos SQLite, `node_modules` e `dist` ficam fora do Git pelo
 `.gitignore`.
+
+## Funcionalidades
+
+- Login com sessao e cookie.
+- Logout.
+- Dashboard protegida.
+- Selecao de data ate 1 ano a frente.
+- Cadastro de renda mensal.
+- Cadastro, edicao e remocao de gastos fixos.
+- Cadastro, edicao e remocao de gastos percentuais.
+- Cadastro, edicao e remocao de gastos variaveis mensais.
+- Previsao financeira mes a mes.
+- Historico mensal real por perfil, com fechamento de renda, gastos e saldo.

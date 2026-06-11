@@ -56,6 +56,16 @@ interface GoalProgress extends FinancialGoal {
   progressPercent: number;
 }
 
+interface MonthlyHistoryRecord {
+  id: number;
+  month_key: string;
+  income_cents: number;
+  fixed_total_cents: number;
+  percentage_total_cents: number;
+  variable_total_cents: number;
+  balance_cents: number;
+}
+
 interface ProjectionMonth {
   label: string;
   incomeCents: number;
@@ -82,10 +92,12 @@ interface DashboardSummary {
   totalExpensesCents: number;
   predictedBalanceCents: number;
   accumulatedBalanceCents: number;
+  selectedHistoryMonth: string;
   fixedExpenses: Expense[];
   percentageExpenses: PercentageExpense[];
   variableExpenses: Expense[];
   goals: GoalProgress[];
+  monthlyHistory: MonthlyHistoryRecord[];
   projectionMonths: ProjectionMonth[];
 }
 
@@ -332,6 +344,34 @@ function monthLabel(date: Date): string {
   });
 }
 
+function currentMonthKey(): string {
+  const today = new Date();
+  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function parseMonthKey(value: unknown): string {
+  const monthKey = String(value ?? "").trim();
+  const match = monthKey.match(/^(\d{4})-(\d{2})$/);
+
+  if (!match) {
+    return currentMonthKey();
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+
+  if (month < 1 || month > 12 || year < 2000 || year > 2100) {
+    return currentMonthKey();
+  }
+
+  return monthKey;
+}
+
+function monthKeyLabel(monthKey: string): string {
+  const [year, month] = monthKey.split("-").map(Number);
+  return monthLabel(new Date(year, month - 1, 1));
+}
+
 function normalizeName(value: unknown, maxLength = 60): string {
   return String(value ?? "").trim().slice(0, maxLength);
 }
@@ -455,6 +495,29 @@ async function getFinancialGoals(
   );
 }
 
+async function getMonthlyHistory(
+  userId: number,
+  profileId: number,
+): Promise<MonthlyHistoryRecord[]> {
+  return all<MonthlyHistoryRecord>(
+    `
+      SELECT
+        id,
+        month_key,
+        income_cents,
+        fixed_total_cents,
+        percentage_total_cents,
+        variable_total_cents,
+        balance_cents
+      FROM monthly_history
+      WHERE user_id = ? AND profile_id = ?
+      ORDER BY month_key DESC
+      LIMIT 12
+    `,
+    [userId, profileId],
+  );
+}
+
 function buildGoalProgress(
   goals: FinancialGoal[],
   monthlyBalanceCents: number,
@@ -493,10 +556,12 @@ async function buildDashboardSummary(
   profiles: FinanceProfile[],
   activeProfile: FinanceProfile,
   dateValue: unknown,
+  historyMonthValue: unknown,
 ): Promise<DashboardSummary> {
   const minDate = todayAtMidnight();
   const maxDate = addYears(minDate, 1);
   const selectedDate = clampDate(dateValue);
+  const selectedHistoryMonth = parseMonthKey(historyMonthValue);
   const incomeCents = await getMonthlyIncomeCents(activeProfile.id);
   const fixedExpenses = await getFixedExpenses(userId, activeProfile.id);
   const percentageExpenses = await getPercentageExpenses(userId, activeProfile.id);
@@ -538,6 +603,7 @@ async function buildDashboardSummary(
   const accumulatedBalanceCents =
     projectionMonths.at(-1)?.accumulatedBalanceCents ?? 0;
   const rawGoals = await getFinancialGoals(userId, activeProfile.id);
+  const monthlyHistory = await getMonthlyHistory(userId, activeProfile.id);
 
   return {
     profiles,
@@ -554,10 +620,12 @@ async function buildDashboardSummary(
     totalExpensesCents,
     predictedBalanceCents: monthlyBalanceCents,
     accumulatedBalanceCents,
+    selectedHistoryMonth,
     fixedExpenses,
     percentageExpenses,
     variableExpenses,
     goals: buildGoalProgress(rawGoals, monthlyBalanceCents, accumulatedBalanceCents),
+    monthlyHistory,
     projectionMonths,
   };
 }
@@ -672,6 +740,25 @@ async function setupDatabase(): Promise<void> {
       name TEXT NOT NULL,
       target_cents INTEGER NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (profile_id) REFERENCES profiles(id)
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS monthly_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      profile_id INTEGER NOT NULL,
+      month_key TEXT NOT NULL,
+      income_cents INTEGER NOT NULL DEFAULT 0,
+      fixed_total_cents INTEGER NOT NULL DEFAULT 0,
+      percentage_total_cents INTEGER NOT NULL DEFAULT 0,
+      variable_total_cents INTEGER NOT NULL DEFAULT 0,
+      balance_cents INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(profile_id, month_key),
       FOREIGN KEY (user_id) REFERENCES users(id),
       FOREIGN KEY (profile_id) REFERENCES profiles(id)
     )
@@ -881,6 +968,23 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
         .join("")
     : `<p class="empty">Nenhuma meta cadastrada.</p>`;
 
+  const historyRows = summary.monthlyHistory.length
+    ? summary.monthlyHistory
+        .map(
+          (record) => `
+            <form class="history-row" method="POST" action="/history/${record.id}/delete">
+              <div>
+                <strong>${escapeHtml(monthKeyLabel(record.month_key))}</strong>
+                <span>entrada ${money(record.income_cents)} | gastos ${money(record.fixed_total_cents + record.percentage_total_cents + record.variable_total_cents)}</span>
+              </div>
+              <strong>${money(record.balance_cents)}</strong>
+              <button type="submit">Remover</button>
+            </form>
+          `,
+        )
+        .join("")
+    : `<p class="empty">Nenhum mes fechado ainda.</p>`;
+
   const chartMax = Math.max(
     summary.incomeCents,
     summary.fixedTotalCents,
@@ -932,7 +1036,7 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
     .metric { margin: 6px 0 14px; font-size: 1.65rem; font-weight: 700; }
     .small { color: #bdbdbd; font-size: 0.9rem; }
     .income-card, .fixed-card, .percentage-card, .variable-card { grid-column: span 3; }
-    .balance-card, .chart-card { grid-column: span 4; }
+    .balance-card, .chart-card, .history-card { grid-column: span 4; }
     .forecast-card { grid-column: span 8; }
     .goals-card { grid-column: span 8; }
     .item-list, .goal-list { display: grid; gap: 8px; max-height: 210px; overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
@@ -968,6 +1072,11 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
     .chart-list { display: grid; gap: 13px; }
     .chart-label { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 6px; color: #d7d7d7; font-size: 0.9rem; }
     .chart-fill { height: 100%; border-radius: 999px; }
+    .history-form { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; margin-bottom: 12px; }
+    .history-list { display: grid; gap: 8px; max-height: 190px; overflow-y: auto; padding-right: 4px; }
+    .history-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 9px; background: #111214; border: 1px solid #292b2f; border-radius: 7px; }
+    .history-row span { display: block; margin-top: 4px; color: #bdbdbd; font-size: 0.82rem; }
+    .history-row button { padding: 7px 8px; font-size: 0.84rem; }
     .income-fill { background: #78a86f; }
     .fixed-fill { background: #b76f64; }
     .percentage-fill { background: #b89d55; }
@@ -975,15 +1084,15 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
     .balance-fill { background: #70a6a0; }
     .negative-fill { background: #c44f4f; }
     @media (max-width: 1180px) {
-      .income-card, .fixed-card, .percentage-card, .variable-card, .balance-card, .chart-card { grid-column: span 6; }
+      .income-card, .fixed-card, .percentage-card, .variable-card, .balance-card, .chart-card, .history-card { grid-column: span 6; }
       .forecast-card, .goals-card { grid-column: span 12; }
       .topbar { grid-template-columns: 1fr; align-items: start; }
       .user-box { justify-content: start; }
     }
     @media (max-width: 760px) {
       .dashboard-grid { grid-template-columns: 1fr; }
-      .income-card, .fixed-card, .percentage-card, .variable-card, .balance-card, .forecast-card, .goals-card, .chart-card { grid-column: span 1; }
-      .compact-form, .income-form, .date-form, .item-row, .percentage-row, .goal-row, .profile-select, .profile-create { grid-template-columns: 1fr; }
+      .income-card, .fixed-card, .percentage-card, .variable-card, .balance-card, .forecast-card, .goals-card, .chart-card, .history-card { grid-column: span 1; }
+      .compact-form, .income-form, .date-form, .item-row, .percentage-row, .goal-row, .profile-select, .profile-create, .history-form, .history-row { grid-template-columns: 1fr; }
       .item-row button:first-of-type, .item-row button:last-of-type, .percentage-row span { grid-column: auto; }
       .balance-grid { grid-template-columns: 1fr; }
       .user-box { flex-wrap: wrap; }
@@ -1125,6 +1234,21 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
           <span class="small">mes atual</span>
         </div>
         <div class="chart-list">${chartRows}</div>
+      </article>
+
+      <article class="card history-card">
+        <div class="card-head">
+          <h2>Historico mensal</h2>
+          <span class="small">${escapeHtml(monthKeyLabel(summary.selectedHistoryMonth))}</span>
+        </div>
+        <form class="history-form" method="POST" action="/history/save">
+          <div class="field">
+            <label for="historyMonth">Mes de fechamento</label>
+            <input id="historyMonth" name="month" type="month" value="${summary.selectedHistoryMonth}" required>
+          </div>
+          <button type="submit">Salvar mes</button>
+        </form>
+        <div class="history-list">${historyRows}</div>
       </article>
 
       <article class="card forecast-card">
@@ -1318,6 +1442,7 @@ app.get("/dashboard", requireLogin, async (request, response, next) => {
       profiles,
       activeProfile,
       request.query.date,
+      request.query.month,
     );
     response.send(dashboardPage(user.username, summary));
   } catch (error) {
@@ -1707,6 +1832,94 @@ app.post("/goals/:id/delete", requireLogin, async (request, response, next) => {
       await run(
         "DELETE FROM financial_goals WHERE id = ? AND user_id = ? AND profile_id = ?",
         [goalId, user.id, profileId],
+      );
+    }
+
+    response.redirect("/dashboard");
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/history/save", requireLogin, async (request, response, next) => {
+  try {
+    const user = request.session.user;
+
+    if (!user) {
+      response.redirect("/login");
+      return;
+    }
+
+    const monthKey = parseMonthKey(request.body.month);
+    const { profiles, activeProfile } = await getProfileContext(
+      user.id,
+      request.session.activeProfileId,
+    );
+    request.session.activeProfileId = activeProfile.id;
+    const summary = await buildDashboardSummary(
+      user.id,
+      profiles,
+      activeProfile,
+      new Date(),
+      monthKey,
+    );
+
+    await run(
+      `
+        INSERT INTO monthly_history (
+          user_id,
+          profile_id,
+          month_key,
+          income_cents,
+          fixed_total_cents,
+          percentage_total_cents,
+          variable_total_cents,
+          balance_cents
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(profile_id, month_key)
+        DO UPDATE SET
+          income_cents = excluded.income_cents,
+          fixed_total_cents = excluded.fixed_total_cents,
+          percentage_total_cents = excluded.percentage_total_cents,
+          variable_total_cents = excluded.variable_total_cents,
+          balance_cents = excluded.balance_cents,
+          updated_at = CURRENT_TIMESTAMP
+      `,
+      [
+        user.id,
+        activeProfile.id,
+        monthKey,
+        summary.incomeCents,
+        summary.fixedTotalCents,
+        summary.percentageTotalCents,
+        summary.variableTotalCents,
+        summary.predictedBalanceCents,
+      ],
+    );
+
+    response.redirect(`/dashboard?month=${encodeURIComponent(monthKey)}`);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/history/:id/delete", requireLogin, async (request, response, next) => {
+  try {
+    const user = request.session.user;
+
+    if (!user) {
+      response.redirect("/login");
+      return;
+    }
+
+    const profileId = await activeProfileIdForRequest(request);
+    const historyId = Number(request.params.id);
+
+    if (Number.isInteger(historyId)) {
+      await run(
+        "DELETE FROM monthly_history WHERE id = ? AND user_id = ? AND profile_id = ?",
+        [historyId, user.id, profileId],
       );
     }
 
