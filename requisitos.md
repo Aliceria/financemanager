@@ -279,65 +279,65 @@ financemanager/
 ```mermaid
 erDiagram
     USERS {
-        INTEGER id PK "Identificador único"
-        TEXT username UK "Nome de usuário único"
-        TEXT password_hash "Hash bcrypt da senha"
+        int id PK
+        string username UK
+        string password_hash
     }
 
     PROFILES {
-        INTEGER id PK "Identificador único"
-        INTEGER user_id FK "Referência ao usuário"
-        TEXT name "Nome do perfil (único por usuário)"
-        TEXT created_at "Data de criação"
+        int id PK
+        int user_id FK
+        string name
+        string created_at
     }
 
     PROFILE_SETTINGS {
-        INTEGER profile_id PK_FK "Referência ao perfil"
-        INTEGER monthly_income_cents "Renda mensal em centavos"
+        int profile_id PK
+        int monthly_income_cents
     }
 
     EXPENSES {
-        INTEGER id PK "Identificador único"
-        INTEGER user_id FK "Referência ao usuário"
-        INTEGER profile_id FK "Referência ao perfil"
-        TEXT type "fixed | percentage | variable"
-        TEXT name "Nome do gasto"
-        INTEGER amount_cents "Valor em centavos"
-        INTEGER percentage_basis_points "Percentual em pontos-base"
-        TEXT created_at "Data de criação"
+        int id PK
+        int user_id FK
+        int profile_id FK
+        string type
+        string name
+        int amount_cents
+        int percentage_basis_points
+        string created_at
     }
 
     FINANCIAL_GOALS {
-        INTEGER id PK "Identificador único"
-        INTEGER user_id FK "Referência ao usuário"
-        INTEGER profile_id FK "Referência ao perfil"
-        TEXT name "Nome da meta"
-        INTEGER target_cents "Valor alvo em centavos"
-        TEXT created_at "Data de criação"
+        int id PK
+        int user_id FK
+        int profile_id FK
+        string name
+        int target_cents
+        string created_at
     }
 
     MONTHLY_HISTORY {
-        INTEGER id PK "Identificador único"
-        INTEGER user_id FK "Referência ao usuário"
-        INTEGER profile_id FK "Referência ao perfil"
-        TEXT month_key UK "Mês no formato YYYY-MM"
-        INTEGER income_cents "Renda do fechamento"
-        INTEGER fixed_total_cents "Total de fixos"
-        INTEGER percentage_total_cents "Total de percentuais"
-        INTEGER variable_total_cents "Total de variáveis"
-        INTEGER balance_cents "Saldo do fechamento"
-        TEXT created_at "Data de criação"
-        TEXT updated_at "Data de atualização"
+        int id PK
+        int user_id FK
+        int profile_id FK
+        string month_key UK
+        int income_cents
+        int fixed_total_cents
+        int percentage_total_cents
+        int variable_total_cents
+        int balance_cents
+        string created_at
+        string updated_at
     }
 
-    USERS ||--o{ PROFILES : "possui"
-    PROFILES ||--o| PROFILE_SETTINGS : "configura"
-    USERS ||--o{ EXPENSES : "cadastra"
-    PROFILES ||--o{ EXPENSES : "agrupa"
-    USERS ||--o{ FINANCIAL_GOALS : "define"
-    PROFILES ||--o{ FINANCIAL_GOALS : "agrupa"
-    USERS ||--o{ MONTHLY_HISTORY : "registra"
-    PROFILES ||--o{ MONTHLY_HISTORY : "fecha por mês"
+    USERS ||--o{ PROFILES : possui
+    PROFILES ||--o| PROFILE_SETTINGS : configura
+    USERS ||--o{ EXPENSES : cadastra
+    PROFILES ||--o{ EXPENSES : agrupa
+    USERS ||--o{ FINANCIAL_GOALS : define
+    PROFILES ||--o{ FINANCIAL_GOALS : agrupa
+    USERS ||--o{ MONTHLY_HISTORY : registra
+    PROFILES ||--o{ MONTHLY_HISTORY : fecha_mes
 ```
 
 **Estrutura das Tabelas**
