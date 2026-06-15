@@ -1,604 +1,494 @@
-# Levantamento de Requisitos
-
-## 1. Visão geral
-
-O Finance Manager é uma aplicação web de controle financeiro pessoal. O sistema
-permite que o usuário crie uma conta, acesse uma dashboard protegida e organize
-seus dados financeiros por perfis separados.
-
-A aplicação foi desenvolvida com Node.js, TypeScript, Express e SQLite. As telas
-são geradas no servidor pelo arquivo `src/index.ts`.
-
-## 2. Arquivos analisados
-
-Este levantamento foi feito com base nos arquivos do projeto:
-
-- `src/index.ts`
-- `README.md`
-- `package.json`
-- `package-lock.json`
-- `tsconfig.json`
-- `index.js`
-- `.gitignore`
-
-Arquivos gerados, sensíveis ou locais não fazem parte do levantamento, como
-`.env`, `node_modules/`, `dist/` e `data/`.
-
-## 3. Objetivo do sistema
-
-O objetivo do sistema é permitir que uma pessoa acompanhe renda, gastos,
-previsões, metas financeiras e histórico mensal em um ambiente simples e local.
-
-O sistema também permite separar planejamentos financeiros em perfis diferentes,
-como casa, faculdade, pessoal ou qualquer outro nome criado pelo usuário.
-
-## 4. Escopo do sistema
-
-O sistema contempla:
-
-- cadastro de usuário
-- login e logout
-- controle de sessão com cookie
-- dashboard protegida
-- criação e seleção de perfis financeiros
-- cadastro de renda mensal
-- cadastro de gastos fixos
-- cadastro de gastos percentuais
-- cadastro de gastos variáveis
-- cálculo de saldo mensal
-- previsão financeira por data
-- metas financeiras
-- gráfico financeiro simples
-- histórico mensal real
-- armazenamento local em SQLite
-
-O sistema não contempla, no estado atual:
-
-- API pública em JSON
-- recuperação de senha
-- envio de e-mail
-- área administrativa separada
-- múltiplos níveis de permissão
-
-## 5. Atores
-
-### Visitante
-
-Usuário que ainda não está autenticado.
-
-Pode:
-
-- acessar a tela de login
-- acessar a tela de cadastro
-- criar uma conta
-
-### Usuário autenticado
-
-Usuário que possui conta e sessão ativa.
-
-Pode:
-
-- acessar a dashboard
-- criar perfis financeiros
-- selecionar o perfil ativo
-- cadastrar renda
-- cadastrar, editar e remover gastos
-- cadastrar, editar e remover metas
-- salvar histórico mensal
-- remover histórico mensal
-- sair da conta
-
-## 6. Requisitos funcionais
-
-### RF01 - Cadastro de usuário
-
-O sistema deve permitir o cadastro de novos usuários.
-
-Critérios:
-
-- o usuário deve informar nome de usuário e senha
-- o nome de usuário deve ter no mínimo 3 caracteres
-- a senha deve ter no mínimo 6 caracteres
-- nomes de usuário repetidos não devem ser aceitos
-- a senha deve ser salva com hash
-- após o cadastro, o usuário deve ser autenticado automaticamente
-- após o cadastro, deve ser criado um perfil financeiro padrão
-
-### RF02 - Login
-
-O sistema deve permitir que usuários cadastrados façam login.
-
-Critérios:
-
-- o usuário deve informar nome de usuário e senha
-- a senha informada deve ser comparada com o hash salvo no banco
-- em caso de dados inválidos, o sistema deve exibir mensagem de erro
-- em caso de sucesso, o sistema deve criar uma sessão
-- após o login, o usuário deve ser redirecionado para a dashboard
-
-### RF03 - Logout
-
-O sistema deve permitir que o usuário encerre a sessão.
-
-Critérios:
-
-- a sessão deve ser destruída no servidor
-- o cookie da sessão deve ser limpo
-- o usuário deve ser redirecionado para a tela de login
-
-### RF04 - Proteção de rotas
-
-O sistema deve impedir o acesso à dashboard e às ações financeiras sem login.
-
-Critérios:
-
-- usuários sem sessão devem ser redirecionados para `/login`
-- usuários autenticados devem conseguir acessar `/dashboard`
-- operações de renda, gastos, perfis, metas e histórico devem exigir login
-
-### RF05 - Perfil financeiro padrão
-
-O sistema deve criar um perfil financeiro padrão para cada usuário.
-
-Critérios:
-
-- o perfil padrão deve ser criado no cadastro do usuário
-- se um usuário antigo não tiver perfil, o sistema deve criar um ao carregar seus dados
-- o perfil padrão deve ser usado como perfil ativo inicial
-
-### RF06 - Criação de perfis financeiros
-
-O sistema deve permitir que o usuário crie novos perfis financeiros.
-
-Critérios:
-
-- cada perfil deve pertencer ao usuário logado
-- o nome do perfil deve ser informado pelo usuário
-- o sistema não deve duplicar perfis com o mesmo nome para o mesmo usuário
-- ao criar um perfil, ele passa a ser o perfil ativo
-
-### RF07 - Seleção de perfil ativo
-
-O sistema deve permitir que o usuário altere o perfil financeiro ativo.
-
-Critérios:
-
-- somente perfis do usuário logado podem ser selecionados
-- o perfil ativo deve ser armazenado na sessão
-- os dados da dashboard devem ser carregados com base no perfil ativo
-
-### RF08 - Cadastro de renda mensal
-
-O sistema deve permitir cadastrar ou atualizar a renda mensal do perfil ativo.
-
-Critérios:
-
-- a renda deve ser informada como valor monetário
-- o valor deve ser convertido para centavos antes de salvar
-- valores negativos ou inválidos devem ser tratados como zero
-- a renda deve ser considerada nos cálculos do painel
-
-### RF09 - Cadastro de gastos fixos
-
-O sistema deve permitir cadastrar gastos fixos.
-
-Critérios:
-
-- o gasto deve ter nome e valor
-- o gasto deve pertencer ao usuário logado
-- o gasto deve pertencer ao perfil ativo
-- o valor deve ser convertido para centavos
-
-### RF10 - Edição de gastos fixos
-
-O sistema deve permitir editar gastos fixos existentes.
-
-Critérios:
-
-- só deve ser possível editar gastos do usuário logado
-- só deve ser possível editar gastos do perfil ativo
-- o nome e o valor podem ser atualizados
-
-### RF11 - Cadastro de gastos percentuais
-
-O sistema deve permitir cadastrar gastos calculados por percentual da renda.
-
-Critérios:
-
-- o gasto deve ter nome e percentual
-- o percentual deve ser salvo em pontos-base
-- percentuais negativos devem virar zero
-- percentuais acima de 100% devem ser limitados a 100%
-- o valor em dinheiro deve ser calculado com base na renda mensal
-
-### RF12 - Edição de gastos percentuais
-
-O sistema deve permitir editar gastos percentuais existentes.
-
-Critérios:
-
-- só deve ser possível editar gastos do usuário logado
-- só deve ser possível editar gastos do perfil ativo
-- o nome e o percentual podem ser atualizados
-
-### RF13 - Cadastro de gastos variáveis
-
-O sistema deve permitir cadastrar gastos variáveis.
-
-Critérios:
-
-- o gasto deve ter nome e valor
-- o valor salvo deve ser usado no cálculo atual do perfil
-- o gasto deve pertencer ao usuário logado e ao perfil ativo
-
-### RF14 - Edição de gastos variáveis
-
-O sistema deve permitir editar gastos variáveis existentes.
-
-Critérios:
-
-- só deve ser possível editar gastos do usuário logado
-- só deve ser possível editar gastos do perfil ativo
-- o nome e o valor podem ser atualizados
-
-### RF15 - Remoção de gastos
-
-O sistema deve permitir remover gastos cadastrados.
-
-Critérios:
-
-- a remoção deve validar usuário logado
-- a remoção deve validar perfil ativo
-- a remoção deve aceitar gastos fixos, percentuais e variáveis
-
-### RF16 - Resumo financeiro
-
-O sistema deve exibir um resumo financeiro do perfil ativo.
-
-Critérios:
-
-- mostrar renda mensal
-- mostrar total de gastos fixos
-- mostrar total de gastos percentuais
-- mostrar total de gastos variáveis
-- mostrar total geral de gastos
-- mostrar saldo mensal
-- mostrar saldo acumulado conforme a data selecionada
-
-### RF17 - Previsão financeira por data
-
-O sistema deve permitir selecionar uma data para previsão financeira.
-
-Critérios:
-
-- a data mínima deve ser a data atual
-- a data máxima deve ser um ano após a data atual
-- se a data for inválida, o sistema deve usar a data atual
-- se a data passar do limite, o sistema deve limitar ao máximo permitido
-- a previsão deve mostrar os meses entre a data atual e a data selecionada
-
-### RF18 - Tabela de previsão
-
-O sistema deve exibir uma tabela de previsão mês a mês.
-
-Critérios:
-
-- mostrar mês
-- mostrar renda
-- mostrar gastos fixos
-- mostrar gastos percentuais
-- mostrar gastos variáveis
-- mostrar saldo mensal
-- mostrar saldo acumulado
-
-### RF19 - Metas financeiras
-
-O sistema deve permitir cadastrar metas financeiras.
-
-Critérios:
-
-- a meta deve ter nome e valor alvo
-- a meta deve pertencer ao usuário logado
-- a meta deve pertencer ao perfil ativo
-- metas com valor zero ou inválido não devem ser salvas
-
-### RF20 - Edição de metas financeiras
-
-O sistema deve permitir editar metas financeiras.
-
-Critérios:
-
-- só deve ser possível editar metas do usuário logado
-- só deve ser possível editar metas do perfil ativo
-- o nome e o valor alvo podem ser atualizados
-
-### RF21 - Remoção de metas financeiras
-
-O sistema deve permitir remover metas financeiras.
-
-Critérios:
-
-- só deve ser possível remover metas do usuário logado
-- só deve ser possível remover metas do perfil ativo
-
-### RF22 - Previsão de metas
-
-O sistema deve calcular uma previsão para alcançar cada meta.
-
-Critérios:
-
-- a previsão deve usar o saldo mensal atual
-- se o saldo mensal for positivo, o sistema calcula em quantos meses a meta pode ser atingida
-- se o saldo mensal for zero ou negativo, a meta deve aparecer sem previsão
-- o sistema deve mostrar o mês e ano estimado
-
-### RF23 - Gráfico simples
-
-O sistema deve exibir um gráfico simples na dashboard.
-
-Critérios:
-
-- mostrar renda
-- mostrar gastos fixos
-- mostrar gastos percentuais
-- mostrar gastos variáveis
-- mostrar saldo mensal
-- o gráfico deve usar barras proporcionais aos valores
-
-### RF24 - Histórico mensal real
-
-O sistema deve permitir salvar um fechamento mensal.
-
-Critérios:
-
-- o usuário deve informar mês e ano
-- o sistema deve salvar renda, gastos fixos, gastos percentuais, gastos variáveis e saldo
-- o fechamento deve pertencer ao usuário logado
-- o fechamento deve pertencer ao perfil ativo
-- se já existir fechamento para o mesmo perfil e mês, o sistema deve atualizar o registro
-
-### RF25 - Listagem de histórico mensal
-
-O sistema deve listar os fechamentos mensais salvos.
-
-Critérios:
-
-- listar no máximo os 12 fechamentos mais recentes
-- ordenar por mês mais recente primeiro
-- mostrar entrada, gastos e saldo
-
-### RF26 - Remoção de histórico mensal
-
-O sistema deve permitir remover um fechamento mensal.
-
-Critérios:
-
-- só deve ser possível remover fechamentos do usuário logado
-- só deve ser possível remover fechamentos do perfil ativo
-
-## 7. Requisitos não funcionais
-
-### RNF01 - Tecnologia principal
-
-O sistema deve ser desenvolvido com Node.js e TypeScript.
-
-### RNF02 - Servidor web
-
-O sistema deve usar Express para criar o servidor web e as rotas.
-
-### RNF03 - Banco de dados
-
-O sistema deve persistir dados em SQLite.
-
-Critérios:
-
-- o banco principal deve ficar em `data/financemanager.sqlite`
-- as sessões também devem ser salvas em SQLite
-- a pasta `data/` não deve ser versionada
-
-### RNF04 - Sessão
-
-O sistema deve usar sessão no servidor.
-
-Critérios:
-
-- a sessão deve usar `express-session`
-- o armazenamento da sessão deve usar `connect-sqlite3`
-- o cookie deve usar `httpOnly`
-- o cookie deve usar `sameSite: lax`
-- o cookie deve usar `secure` quando `NODE_ENV` for `production`
-
-### RNF05 - Segurança de senha
-
-O sistema não deve salvar senha em texto puro.
-
-Critério:
-
-- usar `bcrypt` para gerar hash da senha
-
-### RNF06 - Variáveis de ambiente
-
-O sistema deve carregar configurações a partir de variáveis de ambiente.
-
-Critérios:
-
-- `SESSION_SECRET` deve ser obrigatória
-- `DEFAULT_ADMIN_PASSWORD` pode ser usada para criar o usuário admin inicial
-- `PORT` deve permitir trocar a porta do servidor
-- o arquivo `.env` não deve ser versionado
-
-### RNF07 - Validação de entrada
-
-O sistema deve tratar entradas inválidas antes de calcular ou salvar dados.
-
-Critérios:
-
-- valores monetários inválidos devem virar zero
-- valores monetários negativos devem virar zero
-- percentuais inválidos devem virar zero
-- percentuais acima de 100% devem ser limitados a 100%
-- datas inválidas devem ser corrigidas para uma data permitida
-
-### RNF08 - Proteção contra HTML indesejado
-
-O sistema deve escapar textos exibidos na página.
-
-Critério:
-
-- dados textuais vindos do usuário devem passar por escape antes de aparecer no HTML
-
-### RNF09 - Interface
-
-O sistema deve ter interface em tema escuro e organizada em cards.
-
-Critérios:
-
-- a dashboard deve priorizar leitura rápida
-- os principais dados devem aparecer em cards
-- formulários devem ficar dentro do próprio painel
-- a interface deve funcionar em telas menores com layout responsivo
-
-### RNF10 - Execução local
-
-O sistema deve funcionar localmente após instalar as dependências.
-
-Critérios:
-
-- `npm run dev` deve iniciar o projeto em desenvolvimento
-- `npm run build` deve compilar o TypeScript
-- `npm start` deve rodar a versão compilada
-
-### RNF11 - Arquivos fora do Git
-
-Arquivos sensíveis, gerados ou locais não devem ser versionados.
-
-Critérios:
-
-- não versionar `.env`
-- não versionar `node_modules/`
-- não versionar `dist/`
-- não versionar `data/`
-- não versionar bancos SQLite
-- não versionar logs
-
-## 8. Regras de negócio
-
-### RN01 - Saldo mensal
-
-O saldo mensal deve ser calculado com a fórmula:
+# Levantamento de Requisitos - Finance Manager
+
+[Voltar para README](./README.md)
+
+---
+
+## 1. Visão Geral
+
+O Finance Manager é uma aplicação web local de controle financeiro pessoal desenvolvida em Node.js/Express com TypeScript. O sistema permite que o usuário registre renda, gastos e metas financeiras em perfis separados (casa, faculdade, trabalho etc.), com dashboard protegida por sessão e persistência em SQLite.
+
+**URL local**: `http://localhost:3000`  
+**Porta padrão**: 3000  
+**Ambiente**: Local (sem APIs externas)
+
+---
+
+## Índice
+
+- [1. Visão Geral](#1-visão-geral)
+- [2. Requisitos Funcionais](#2-requisitos-funcionais)
+- [3. Requisitos Não Funcionais](#3-requisitos-não-funcionais)
+- [4. Arquitetura e Tecnologias](#4-arquitetura-e-tecnologias)
+  - [4.5 Banco de Dados](#45-banco-de-dados)
+- [5. Variáveis de Ambiente](#5-variáveis-de-ambiente)
+- [6. Rotas da Aplicação](#6-rotas-da-aplicação)
+- [7. Segurança Implementada](#7-segurança-implementada)
+- [8. Execução e Build](#8-execução-e-build)
+
+---
+
+## 2. Requisitos Funcionais
+
+### 2.1 Autenticação e Sessão
+
+**Registro de Usuário**
+- Sistema permite registro com nome de usuário e senha
+- Nome de usuário único no sistema (mínimo 3, máximo 40 caracteres)
+- Senha mínima de 6 caracteres, criptografada com bcrypt (12 rounds)
+- Após registro, usuário é autenticado automaticamente
+- Perfil financeiro `Padrão` criado automaticamente
+- Rotas: `GET /register`, `POST /register`
+
+**Login de Usuário**
+- Autenticação com nome de usuário e senha
+- Comparação de senha com hash armazenado
+- Sessão criada no servidor com cookie `financemanager.sid`
+- Perfil ativo inicial definido na sessão
+- Redirecionamento para `/dashboard` após login
+- Rotas: `GET /login`, `POST /login`
+
+**Logout**
+- Destruição da sessão no servidor
+- Limpeza do cookie de sessão
+- Redirecionamento para `/login`
+- Rota: `POST /logout`
+
+**Proteção de Rotas**
+- Middleware `requireLogin` em rotas protegidas
+- Usuários sem sessão redirecionados para `/login`
+- Usuários logados em `/login` ou `/register` redirecionados para `/dashboard`
+- `GET /` redireciona para login ou dashboard conforme sessão
+
+**Usuário Admin Inicial (opcional)**
+- Se `DEFAULT_ADMIN_PASSWORD` estiver definida e não existir usuário `admin`, o sistema cria automaticamente na inicialização
+- Sem comportamento especial de painel; funciona como usuário comum
+
+### 2.2 Perfis Financeiros
+
+**Perfil Padrão**
+- Todo usuário possui ao menos um perfil chamado `Padrão`
+- Criado no cadastro ou na primeira carga de dados
+- Usuários antigos sem perfil recebem um automaticamente
+
+**Criação de Perfil**
+- Usuário autenticado pode criar perfis com nome personalizado (máx. 40 caracteres)
+- Não permite duplicar nome de perfil para o mesmo usuário
+- Novo perfil criado passa a ser o perfil ativo
+- Rota: `POST /profiles`
+
+**Seleção de Perfil Ativo**
+- Usuário escolhe qual perfil visualizar/editar
+- Perfil ativo armazenado na sessão (`activeProfileId`)
+- Renda, gastos, metas e histórico são isolados por perfil
+- Rota: `POST /profiles/select`
+
+### 2.3 Renda e Gastos
+
+**Renda Mensal**
+- Cadastro ou atualização da renda mensal do perfil ativo
+- Valor convertido para centavos antes de salvar
+- Valores inválidos ou negativos tratados como zero
+- Rota: `POST /income`
+
+**Gastos Fixos**
+- Cadastro com nome e valor fixo mensal
+- Edição e remoção de gastos existentes
+- Vinculados ao usuário logado e ao perfil ativo
+- Rotas: `POST /expenses/fixed`, `POST /expenses/:id/fixed`, `POST /expenses/:id/delete`
+
+**Gastos Percentuais**
+- Cadastro com nome e percentual sobre a renda mensal
+- Percentual salvo em pontos-base (ex.: 10% = 1000)
+- Percentuais inválidos viram zero; acima de 100% limitados a 100%
+- Valor em dinheiro calculado na exibição: `renda × percentual / 100`
+- Rotas: `POST /expenses/percentage`, `POST /expenses/:id/percentage`, `POST /expenses/:id/delete`
+
+**Gastos Variáveis**
+- Cadastro com nome e valor atual
+- Último valor salvo usado nos cálculos e na projeção dos próximos meses
+- Rotas: `POST /expenses/variable`, `POST /expenses/:id/variable`, `POST /expenses/:id/delete`
+
+**Cálculo do Saldo Mensal**
 
 ```text
-renda mensal - gastos fixos - gastos percentuais - gastos variáveis
+saldo = renda mensal - gastos fixos - gastos percentuais - gastos variáveis
 ```
 
-### RN02 - Gasto percentual
+### 2.4 Dashboard e Previsão
 
-Gastos percentuais devem ser calculados sobre a renda mensal do perfil ativo.
+**Resumo Financeiro**
+- Exibe renda, totais de gastos (fixos, percentuais, variáveis), saldo mensal e saldo acumulado
+- Dados carregados conforme perfil ativo
+- Rota: `GET /dashboard`
 
-Exemplo:
+**Gráfico Simples**
+- Barras proporcionais para entrada, fixos, percentuais, variáveis e saldo mensal
+- Saldo negativo exibido com cor distinta
 
-```text
-renda mensal: R$ 3000,00
-percentual: 10%
-valor calculado: R$ 300,00
+**Previsão por Data**
+- Usuário seleciona data entre hoje e até 1 ano à frente
+- Tabela mês a mês com renda, gastos, saldo e saldo acumulado
+- Assume renda e gastos constantes em todos os meses projetados
+- Saldo acumulado = `saldo mensal × número de meses`
+- Parâmetro: `GET /dashboard?date=YYYY-MM-DD`
+
+### 2.5 Metas Financeiras
+
+**Cadastro e Edição**
+- Meta com nome e valor alvo
+- Vinculada ao usuário e ao perfil ativo
+- Metas com valor zero ou inválido não são salvas
+- Rotas: `POST /goals`, `POST /goals/:id`, `POST /goals/:id/delete`
+
+**Previsão de Metas**
+- Calculada com base no saldo mensal atual
+- Se saldo mensal ≤ 0: exibe "sem previsão"
+- Se saldo positivo: estima mês/ano e quantidade de meses para atingir o valor
+- Barra de progresso usa saldo acumulado projetado
+
+### 2.6 Histórico Mensal
+
+**Salvar Fechamento**
+- Usuário escolhe mês/ano (`YYYY-MM`)
+- Sistema salva renda, totais de gastos e saldo do momento
+- Se já existir fechamento para o mesmo perfil e mês, atualiza o registro
+- Rota: `POST /history/save`
+
+**Listagem**
+- Exibe até os 12 fechamentos mais recentes do perfil ativo
+- Ordenação do mês mais recente para o mais antigo
+- Mostra entrada, gastos e saldo de cada mês
+
+**Remoção**
+- Rota: `POST /history/:id/delete`
+
+### 2.7 Interface do Usuário
+
+**Página de Login** (`/login`)
+- Formulário com usuário e senha
+- Link para cadastro
+- HTML gerado no servidor
+
+**Página de Cadastro** (`/register`)
+- Formulário com usuário e senha
+- Link para login
+- HTML gerado no servidor
+
+**Dashboard** (`/dashboard`)
+- Tema escuro, layout em cards responsivo
+- Seletor e criação de perfis no topo
+- Cards de renda, gastos, balanço, gráfico, previsão, metas e histórico
+- Formulários embutidos na própria página (sem SPA)
+- Requer sessão ativa
+
+---
+
+## 3. Requisitos Não Funcionais
+
+**Performance**
+- Aplicação local, sem dependência de serviços externos
+- Respostas síncronas com SQLite em arquivo local
+
+**Segurança**
+- Senhas com hash bcrypt
+- Sessão com cookie `httpOnly` e `sameSite: lax`
+- `secure: true` quando `NODE_ENV=production`
+- Escape HTML em textos exibidos na interface
+- Dados financeiros isolados por usuário e perfil
+
+**Confiabilidade**
+- Tratamento global de erro 500
+- Migração automática de esquema na inicialização do banco
+
+**Manutenibilidade**
+- TypeScript com `strict: true`
+- Código concentrado em `src/index.ts`
+
+**Usabilidade**
+- Interface em português (pt-BR)
+- Valores monetários formatados em BRL
+- Layout responsivo para telas menores
+
+**Privacidade**
+- Dados armazenados apenas no SQLite local
+- Sem envio de dados financeiros para APIs externas
+
+---
+
+## 4. Arquitetura e Tecnologias
+
+**Stack Tecnológico**
+
+Backend:
+- Node.js
+- Express.js v4.21.2
+- TypeScript 5.7.3
+- SQLite (sqlite3 v5.1.7)
+- express-session v1.18.1
+- connect-sqlite3 v0.9.16
+- bcrypt v6.0.0
+
+Frontend:
+- HTML/CSS gerado no servidor (SSR manual)
+- Sem framework JavaScript no cliente
+
+Ferramentas:
+- TypeScript Compiler (`tsc`)
+- tsx v4.19.2 (desenvolvimento)
+
+**Estrutura de Diretórios**
+
+```
+financemanager/
+├── src/
+│   └── index.ts         # Servidor, rotas, banco e páginas HTML
+├── index.js             # Entry point da versão compilada
+├── package.json
+├── tsconfig.json
+├── README.md
+├── requisitos.md
+├── .env                 # Variáveis de ambiente (local)
+├── data/                # Banco e sessões (não versionado)
+│   ├── financemanager.sqlite
+│   └── sessions.sqlite
+└── dist/                # Código compilado
 ```
 
-### RN03 - Separação por perfil
+**Fluxo de Requisição**
 
-Renda, gastos, metas e histórico devem ser separados por perfil financeiro.
+1. Requisição HTTP → Express
+2. Parser de body (`application/x-www-form-urlencoded`)
+3. Middleware de sessão (`express-session` + SQLite store)
+4. Roteamento:
+   - Rotas públicas → login/registro
+   - Rotas protegidas → `requireLogin`
+5. Consulta/gravação no SQLite
+6. Resposta HTML ou redirect
 
-### RN04 - Separação por usuário
+### 4.5 Banco de Dados
 
-Um usuário não deve editar, remover ou visualizar dados financeiros de outro
-usuário.
+**Tecnologia e Configuração**
+- **SGBD**: SQLite
+- **Biblioteca**: sqlite3 v5.1.7
+- **Arquivo principal**: `data/financemanager.sqlite`
+- **Sessões**: `data/sessions.sqlite` (via connect-sqlite3)
 
-### RN05 - Perfil padrão
+**Diagrama Entidade Relacionamento**
 
-Todo usuário deve ter pelo menos um perfil financeiro.
+```mermaid
+erDiagram
+    USERS {
+        INTEGER id PK "Identificador único"
+        TEXT username UK "Nome de usuário único"
+        TEXT password_hash "Hash bcrypt da senha"
+    }
 
-### RN06 - Previsão por data
+    PROFILES {
+        INTEGER id PK "Identificador único"
+        INTEGER user_id FK "Referência ao usuário"
+        TEXT name "Nome do perfil (único por usuário)"
+        TEXT created_at "Data de criação"
+    }
 
-A previsão financeira deve considerar a situação atual do perfil e projetar os
-valores mês a mês até a data selecionada.
+    PROFILE_SETTINGS {
+        INTEGER profile_id PK_FK "Referência ao perfil"
+        INTEGER monthly_income_cents "Renda mensal em centavos"
+    }
 
-### RN07 - Previsão de metas
+    EXPENSES {
+        INTEGER id PK "Identificador único"
+        INTEGER user_id FK "Referência ao usuário"
+        INTEGER profile_id FK "Referência ao perfil"
+        TEXT type "fixed | percentage | variable"
+        TEXT name "Nome do gasto"
+        INTEGER amount_cents "Valor em centavos"
+        INTEGER percentage_basis_points "Percentual em pontos-base"
+        TEXT created_at "Data de criação"
+    }
 
-A previsão de metas deve considerar o saldo mensal atual.
+    FINANCIAL_GOALS {
+        INTEGER id PK "Identificador único"
+        INTEGER user_id FK "Referência ao usuário"
+        INTEGER profile_id FK "Referência ao perfil"
+        TEXT name "Nome da meta"
+        INTEGER target_cents "Valor alvo em centavos"
+        TEXT created_at "Data de criação"
+    }
 
-Se o saldo mensal for menor ou igual a zero, não deve haver previsão de data para
-a meta.
+    MONTHLY_HISTORY {
+        INTEGER id PK "Identificador único"
+        INTEGER user_id FK "Referência ao usuário"
+        INTEGER profile_id FK "Referência ao perfil"
+        TEXT month_key UK "Mês no formato YYYY-MM"
+        INTEGER income_cents "Renda do fechamento"
+        INTEGER fixed_total_cents "Total de fixos"
+        INTEGER percentage_total_cents "Total de percentuais"
+        INTEGER variable_total_cents "Total de variáveis"
+        INTEGER balance_cents "Saldo do fechamento"
+        TEXT created_at "Data de criação"
+        TEXT updated_at "Data de atualização"
+    }
 
-### RN08 - Histórico mensal
+    USERS ||--o{ PROFILES : "possui"
+    PROFILES ||--o| PROFILE_SETTINGS : "configura"
+    USERS ||--o{ EXPENSES : "cadastra"
+    PROFILES ||--o{ EXPENSES : "agrupa"
+    USERS ||--o{ FINANCIAL_GOALS : "define"
+    PROFILES ||--o{ FINANCIAL_GOALS : "agrupa"
+    USERS ||--o{ MONTHLY_HISTORY : "registra"
+    PROFILES ||--o{ MONTHLY_HISTORY : "fecha por mês"
+```
 
-O histórico mensal deve ser um fechamento salvo pelo usuário.
+**Estrutura das Tabelas**
 
-Alterações posteriores em renda ou gastos não devem alterar automaticamente um
-fechamento já salvo. Para atualizar um mês, o usuário deve salvar o fechamento
-novamente.
+**Tabela `users`**
+- `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
+- `username` (TEXT UNIQUE)
+- `password_hash` (TEXT) — hash bcrypt
 
-## 9. Casos de uso
+**Tabela `profiles`**
+- `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
+- `user_id` (INTEGER, FOREIGN KEY → users.id)
+- `name` (TEXT) — único por usuário
+- `created_at` (TEXT)
 
-### CU01 - Criar conta
+**Tabela `profile_settings`**
+- `profile_id` (INTEGER PRIMARY KEY, FOREIGN KEY → profiles.id)
+- `monthly_income_cents` (INTEGER DEFAULT 0)
 
-1. O visitante acessa a tela de cadastro.
-2. Informa nome de usuário e senha.
-3. O sistema valida os dados.
-4. O sistema cria o usuário.
-5. O sistema cria o perfil padrão.
-6. O sistema inicia a sessão.
-7. O usuário é redirecionado para a dashboard.
+**Tabela `expenses`**
+- `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
+- `user_id` (INTEGER, FOREIGN KEY → users.id)
+- `profile_id` (INTEGER, FOREIGN KEY → profiles.id)
+- `type` (TEXT) — `fixed`, `percentage` ou `variable`
+- `name` (TEXT)
+- `amount_cents` (INTEGER)
+- `percentage_basis_points` (INTEGER)
+- `created_at` (TEXT)
 
-### CU02 - Fazer login
+**Tabela `financial_goals`**
+- `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
+- `user_id` (INTEGER, FOREIGN KEY → users.id)
+- `profile_id` (INTEGER, FOREIGN KEY → profiles.id)
+- `name` (TEXT)
+- `target_cents` (INTEGER)
+- `created_at` (TEXT)
 
-1. O visitante acessa a tela de login.
-2. Informa nome de usuário e senha.
-3. O sistema compara a senha com o hash salvo.
-4. O sistema inicia a sessão.
-5. O usuário é redirecionado para a dashboard.
+**Tabela `monthly_history`**
+- `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
+- `user_id` (INTEGER, FOREIGN KEY → users.id)
+- `profile_id` (INTEGER, FOREIGN KEY → profiles.id)
+- `month_key` (TEXT) — único por perfil (`YYYY-MM`)
+- `income_cents`, `fixed_total_cents`, `percentage_total_cents`, `variable_total_cents`, `balance_cents` (INTEGER)
+- `created_at`, `updated_at` (TEXT)
 
-### CU03 - Criar perfil financeiro
+**Relacionamentos**
+- Um usuário possui vários perfis — 1:N
+- Um perfil possui uma configuração de renda — 1:1
+- Um perfil possui vários gastos, metas e fechamentos mensais — 1:N
 
-1. O usuário está logado.
-2. Informa o nome do novo perfil.
-3. O sistema cria o perfil para o usuário logado.
-4. O sistema define o novo perfil como ativo.
+---
 
-### CU04 - Registrar renda e gastos
+## 5. Variáveis de Ambiente
 
-1. O usuário seleciona um perfil.
-2. Informa a renda mensal.
-3. Cadastra gastos fixos.
-4. Cadastra gastos percentuais.
-5. Cadastra gastos variáveis.
-6. O sistema recalcula os totais da dashboard.
+Arquivo `.env` na raiz do projeto:
 
-### CU05 - Criar meta financeira
+```env
+SESSION_SECRET=uma_chave_para_assinar_a_sessao
+DEFAULT_ADMIN_PASSWORD=senha_do_usuario_admin_inicial
+PORT=3000
+```
 
-1. O usuário informa nome e valor alvo da meta.
-2. O sistema salva a meta no perfil ativo.
-3. O sistema calcula a previsão com base no saldo mensal.
-4. A meta aparece na dashboard.
+| Variável | Obrigatória | Padrão | Descrição |
+| --- | --- | --- | --- |
+| `SESSION_SECRET` | Sim | — | Chave para assinar a sessão. Servidor não inicia sem ela. |
+| `DEFAULT_ADMIN_PASSWORD` | Não | — | Cria usuário `admin` na primeira execução, se ainda não existir. |
+| `PORT` | Não | `3000` | Porta HTTP do servidor. |
+| `NODE_ENV` | Não | — | Quando `production`, cookie de sessão usa `secure: true`. |
 
-### CU06 - Salvar fechamento mensal
+- `.env` não deve ser versionado
+- Variáveis carregadas por parser manual no início de `src/index.ts`
 
-1. O usuário seleciona mês e ano.
-2. O sistema lê os valores atuais do perfil.
-3. O sistema salva ou atualiza o fechamento mensal.
-4. O fechamento aparece no histórico.
+---
 
-## 10. Critérios gerais de aceite
+## 6. Rotas da Aplicação
 
-- o projeto compila com `npm run build`
-- o usuário consegue criar conta
-- o usuário consegue fazer login
-- usuário sem login não acessa a dashboard
-- o usuário consegue sair da conta
-- todo usuário tem perfil padrão
-- perfis separam os dados financeiros
-- renda mensal altera os cálculos da dashboard
-- gastos fixos entram no saldo mensal
-- gastos percentuais são calculados sobre a renda
-- gastos variáveis entram no saldo mensal
-- metas exibem previsão quando há saldo positivo
-- histórico mensal salva fechamento por perfil
-- dados de um usuário não podem ser alterados por outro usuário
+**Rotas Públicas**
+
+| Método | Rota | Descrição |
+| --- | --- | --- |
+| `GET` | `/` | Redireciona para login ou dashboard |
+| `GET` | `/login` | Página de login |
+| `POST` | `/login` | Autentica usuário |
+| `GET` | `/register` | Página de cadastro |
+| `POST` | `/register` | Cria conta e perfil padrão |
+
+**Rotas Protegidas (sessão)**
+
+| Método | Rota | Descrição |
+| --- | --- | --- |
+| `GET` | `/dashboard` | Dashboard financeira (`?date=`, `?month=`) |
+| `POST` | `/logout` | Encerra sessão |
+| `POST` | `/profiles` | Cria perfil financeiro |
+| `POST` | `/profiles/select` | Seleciona perfil ativo |
+| `POST` | `/income` | Salva renda mensal |
+| `POST` | `/expenses/fixed` | Adiciona gasto fixo |
+| `POST` | `/expenses/:id/fixed` | Edita gasto fixo |
+| `POST` | `/expenses/percentage` | Adiciona gasto percentual |
+| `POST` | `/expenses/:id/percentage` | Edita gasto percentual |
+| `POST` | `/expenses/variable` | Adiciona gasto variável |
+| `POST` | `/expenses/:id/variable` | Edita gasto variável |
+| `POST` | `/expenses/:id/delete` | Remove gasto |
+| `POST` | `/goals` | Adiciona meta |
+| `POST` | `/goals/:id` | Edita meta |
+| `POST` | `/goals/:id/delete` | Remove meta |
+| `POST` | `/history/save` | Salva fechamento mensal |
+| `POST` | `/history/:id/delete` | Remove fechamento |
+
+Todas as ações de escrita usam `application/x-www-form-urlencoded` e redirecionam para `/dashboard`.
+
+---
+
+## 7. Segurança Implementada
+
+- Sessão no servidor com `express-session`
+- Armazenamento de sessão em SQLite (`connect-sqlite3`)
+- Cookie `financemanager.sid` com `httpOnly` e `sameSite: lax`
+- `session.regenerate` no login e no cadastro
+- Senhas criptografadas com bcrypt (12 rounds)
+- `SESSION_SECRET` obrigatória para iniciar o servidor
+- Escape HTML em dados exibidos na interface
+- Queries filtradas por `user_id` e `profile_id` da sessão
+- Valores monetários persistidos em centavos inteiros
+- Dados sensíveis apenas no `.env` local (não versionado)
+
+**Não implementado**
+- Proteção CSRF em formulários POST
+- Rate limiting em login/cadastro
+
+---
+
+## 8. Execução e Build
+
+**Instalação**
+```bash
+npm install
+```
+
+**Desenvolvimento**
+```bash
+npm run dev
+```
+
+**Compilação**
+```bash
+npm run build
+```
+
+**Produção local**
+```bash
+npm start
+```
+
+A aplicação sobe em `http://localhost:3000` (ou na porta definida em `PORT`).
