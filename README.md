@@ -7,8 +7,8 @@ A ideia do projeto é permitir que uma pessoa registre renda, gastos e metas
 financeiras em perfis separados, como casa, faculdade, trabalho ou qualquer
 outro planejamento que ela queira acompanhar.
 
-[Levantamento de requisitos](./requisitos.md)
-[Diagrama Entidade Relacionamento](./diagramaER.md)
+- [Levantamento de requisitos](./requisitos.md)
+- [Diagrama Entidade Relacionamento](./diagramaER.md)
 
 ## Índice
 
