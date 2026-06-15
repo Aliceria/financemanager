@@ -8,7 +8,7 @@ financeiras em perfis separados, como casa, faculdade, trabalho ou qualquer
 outro planejamento que ela queira acompanhar.
 
 - [Levantamento de requisitos](./requisitos.md)
-- [Diagrama Entidade Relacionamento](./diagramaER.md)
+- [Diagrama Entidade Relacionamento](./DiagramaER.md)
 
 ## Índice
 
