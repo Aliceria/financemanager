@@ -141,7 +141,8 @@ const SESSION_SECRET = process.env.SESSION_SECRET;
 const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD;
 const DATA_DIR = path.join(__dirname, "..", "data");
 const DB_PATH = path.join(DATA_DIR, "financemanager.sqlite");
-const DEFAULT_PROFILE_NAME = "PADRAO";
+const OLD_DEFAULT_PROFILE_NAME = "PADRAO";
+const DEFAULT_PROFILE_NAME = "Padrão";
 
 if (!SESSION_SECRET) {
   throw new Error("Defina SESSION_SECRET antes de iniciar o servidor.");
@@ -391,7 +392,7 @@ async function createDefaultProfile(userId: number): Promise<FinanceProfile> {
   );
 
   if (!profile) {
-    throw new Error("Nao foi possivel criar o perfil padrao.");
+    throw new Error("Não foi possível criar o perfil padrão.");
   }
 
   return profile;
@@ -529,7 +530,7 @@ function buildGoalProgress(
     if (monthlyBalanceCents <= 0 || goal.target_cents <= 0) {
       return {
         ...goal,
-        forecastLabel: "sem previsao",
+        forecastLabel: "sem previsão",
         monthsNeeded: null,
         progressPercent: 0,
       };
@@ -651,7 +652,7 @@ async function setupDatabase(): Promise<void> {
     ]);
   } else if (!admin) {
     console.warn(
-      "Nenhum usuario admin criado. Defina DEFAULT_ADMIN_PASSWORD no ambiente.",
+      "Nenhum usuário admin criado. Defina DEFAULT_ADMIN_PASSWORD no ambiente.",
     );
   }
 
@@ -665,6 +666,21 @@ async function setupDatabase(): Promise<void> {
       FOREIGN KEY (user_id) REFERENCES users(id)
     )
   `);
+
+  await run(
+    `
+      UPDATE profiles
+      SET name = ?
+      WHERE name = ?
+        AND NOT EXISTS (
+          SELECT 1
+          FROM profiles AS existing_profile
+          WHERE existing_profile.user_id = profiles.user_id
+            AND existing_profile.name = ?
+        )
+    `,
+    [DEFAULT_PROFILE_NAME, OLD_DEFAULT_PROFILE_NAME, DEFAULT_PROFILE_NAME],
+  );
 
   await run(
     `
@@ -778,7 +794,7 @@ async function activeProfileIdForRequest(request: Request): Promise<number> {
   const user = request.session.user;
 
   if (!user) {
-    throw new Error("Usuario nao autenticado.");
+    throw new Error("Usuário não autenticado.");
   }
 
   const { activeProfile } = await getProfileContext(
@@ -831,13 +847,13 @@ function loginPage(error = "", username = ""): string {
     "Login",
     error,
     `<form method="POST" action="/login">
-      <label for="username">Usuario</label>
+      <label for="username">Usuário</label>
       <input id="username" name="username" value="${escapeHtml(username)}" required>
       <label for="password">Senha</label>
       <input id="password" name="password" type="password" required>
       <button type="submit">Entrar</button>
     </form>`,
-    `Nao tem conta? <a href="/register">Criar conta</a>`,
+    `Não tem conta? <a href="/register">Criar conta</a>`,
   );
 }
 
@@ -846,13 +862,13 @@ function registerPage(error = "", username = ""): string {
     "Criar conta",
     error,
     `<form method="POST" action="/register">
-      <label for="username">Usuario</label>
+      <label for="username">Usuário</label>
       <input id="username" name="username" minlength="3" maxlength="40" value="${escapeHtml(username)}" required>
       <label for="password">Senha</label>
       <input id="password" name="password" type="password" minlength="6" required>
       <button type="submit">Registrar</button>
     </form>`,
-    `Ja tem conta? <a href="/login">Entrar</a>`,
+    `Já tem conta? <a href="/login">Entrar</a>`,
   );
 }
 
@@ -921,7 +937,7 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
           `,
         )
         .join("")
-    : `<p class="empty">Nenhum gasto variavel cadastrado.</p>`;
+    : `<p class="empty">Nenhum gasto variável cadastrado.</p>`;
 
   const profileOptions = summary.profiles
     .map(
@@ -955,7 +971,7 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
               <input name="name" value="${escapeHtml(goal.name)}" required>
               <input name="target" type="number" min="0" step="0.01" value="${(goal.target_cents / 100).toFixed(2)}" required>
               <div class="goal-progress">
-                <span>${goal.forecastLabel}${goal.monthsNeeded ? ` (${goal.monthsNeeded} mes(es))` : ""}</span>
+                <span>${goal.forecastLabel}${goal.monthsNeeded ? ` (${goal.monthsNeeded} mês(es))` : ""}</span>
                 <div class="progress-track">
                   <div class="progress-fill" style="width: ${goal.progressPercent}%"></div>
                 </div>
@@ -983,7 +999,7 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
           `,
         )
         .join("")
-    : `<p class="empty">Nenhum mes fechado ainda.</p>`;
+    : `<p class="empty">Nenhum mês fechado ainda.</p>`;
 
   const chartMax = Math.max(
     summary.incomeCents,
@@ -997,7 +1013,7 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
     chartBar("Entrada", summary.incomeCents, chartMax, "income-fill"),
     chartBar("Fixos", summary.fixedTotalCents, chartMax, "fixed-fill"),
     chartBar("Percentuais", summary.percentageTotalCents, chartMax, "percentage-fill"),
-    chartBar("Variaveis", summary.variableTotalCents, chartMax, "variable-fill"),
+    chartBar("Variáveis", summary.variableTotalCents, chartMax, "variable-fill"),
     chartBar(
       "Saldo mensal",
       summary.predictedBalanceCents,
@@ -1114,7 +1130,7 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
       </form>
     </div>
     <div class="user-box">
-      <span>usuario: ${escapeHtml(username)}</span>
+      <span>usuário: ${escapeHtml(username)}</span>
       <form method="POST" action="/logout">
         <button type="submit">Sair</button>
       </form>
@@ -1182,7 +1198,7 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
 
       <article class="card variable-card">
         <div class="card-head">
-          <h2>Gastos variaveis</h2>
+          <h2>Gastos variáveis</h2>
           <strong>${money(summary.variableTotalCents)}</strong>
         </div>
         <div class="item-list">${variableRows}</div>
@@ -1200,12 +1216,12 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
             <button type="submit">Adicionar</button>
           </form>
         </details>
-        <p class="small">O ultimo valor salvo vale para os proximos meses.</p>
+        <p class="small">O último valor salvo vale para os próximos meses.</p>
       </article>
 
       <article class="card balance-card">
         <div class="card-head">
-          <h2>Balanca / resumo</h2>
+          <h2>Balança / resumo</h2>
           <span class="small">${escapeHtml(summary.activeProfile.name)}</span>
         </div>
         <div class="balance-grid">
@@ -1222,39 +1238,39 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
             <strong>${money(summary.totalExpensesCents)}</strong>
           </div>
           <div class="balance-box">
-            <p>Periodo</p>
-            <strong>${summary.monthsAhead} mes(es)</strong>
+            <p>Período</p>
+            <strong>${summary.monthsAhead} mês(es)</strong>
           </div>
         </div>
       </article>
 
       <article class="card chart-card">
         <div class="card-head">
-          <h2>Grafico simples</h2>
-          <span class="small">mes atual</span>
+          <h2>Gráfico simples</h2>
+          <span class="small">mês atual</span>
         </div>
         <div class="chart-list">${chartRows}</div>
       </article>
 
       <article class="card history-card">
         <div class="card-head">
-          <h2>Historico mensal</h2>
+          <h2>Histórico mensal</h2>
           <span class="small">${escapeHtml(monthKeyLabel(summary.selectedHistoryMonth))}</span>
         </div>
         <form class="history-form" method="POST" action="/history/save">
           <div class="field">
-            <label for="historyMonth">Mes de fechamento</label>
+            <label for="historyMonth">Mês de fechamento</label>
             <input id="historyMonth" name="month" type="month" value="${summary.selectedHistoryMonth}" required>
           </div>
-          <button type="submit">Salvar mes</button>
+          <button type="submit">Salvar mês</button>
         </form>
         <div class="history-list">${historyRows}</div>
       </article>
 
       <article class="card forecast-card">
         <div class="card-head">
-          <h2>Previsao por data</h2>
-          <span class="small">ate ${escapeHtml(summary.monthLabel)}</span>
+          <h2>Previsão por data</h2>
+          <span class="small">até ${escapeHtml(summary.monthLabel)}</span>
         </div>
         <form class="date-form" method="GET" action="/dashboard">
           <div class="field">
@@ -1267,14 +1283,14 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
           <table class="projection-table">
             <thead>
               <tr>
-                <th>Mes</th>
+                <th>Mês</th>
                 <th>Renda</th>
                 <th>Fixos</th>
                 <th>Percentuais</th>
-                <th>Variaveis</th>
+                <th>Variáveis</th>
                 <th>Saldo</th>
                 <th>Acumulado</th>
-                <th>Diferenca</th>
+                <th>Diferença</th>
               </tr>
             </thead>
             <tbody>${projectionRows}</tbody>
@@ -1285,7 +1301,7 @@ function dashboardPage(username: string, summary: DashboardSummary): string {
       <article class="card goals-card">
         <div class="card-head">
           <h2>Metas financeiras</h2>
-          <span class="small">previsao pelo saldo mensal</span>
+          <span class="small">previsão pelo saldo mensal</span>
         </div>
         <div class="goal-list">${goalRows}</div>
         <details>
@@ -1349,7 +1365,7 @@ app.post("/login", async (request, response, next) => {
     ]);
 
     if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-      response.status(401).send(loginPage("Usuario ou senha invalidos.", username));
+      response.status(401).send(loginPage("Usuário ou senha inválidos.", username));
       return;
     }
 
@@ -1415,7 +1431,7 @@ app.post("/register", async (request, response, next) => {
     const sqliteError = error as { code?: string };
 
     if (sqliteError.code === "SQLITE_CONSTRAINT") {
-      response.status(409).send(registerPage("Esse usuario ja existe.", request.body.username));
+      response.status(409).send(registerPage("Esse usuário já existe.", request.body.username));
       return;
     }
 
